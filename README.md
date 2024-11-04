@@ -47,6 +47,22 @@ In order for Helixer to find this binary, it needs to be on the PATH. The easies
 the binary to the bin folder in the virtual environment which you previously created for Helixer 
 (e.g. `path_to_Helixer/env/bin` )
 
+## Ubuntu installer script
+
+Download the installer file (install_helixer_post.sh) from this repository and do the following
+
+```
+chmod +x install_helixer_post.sh
+./install_helixer_post.sh
+
+```
+After building the binary you will be prompted to create binary at a desired location, if not unsure you can simply copy paste the following
+
+```
+/usr/local/bin
+```
+
+
 ## Concept
 HelixerPost uses a sliding window assessment to determine regions of the genome which are likely gene containing.
 This is then followed by a Hidden Markov Model to convert the base class and coding phase predictions within
