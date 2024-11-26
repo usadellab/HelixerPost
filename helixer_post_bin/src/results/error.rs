@@ -1,7 +1,7 @@
 use std::fmt::{self, Debug, Display};
 
 pub enum Error {
-    Hdf5(hdf5::Error),
+    Hdf5(hdf5_metno::Error),
     MismatchedDimensions(usize, usize),
     MismatchedBlockCount(usize, usize),
     MismatchedBlockSize(usize, usize),
@@ -70,8 +70,8 @@ impl Debug for Error {
     }
 }
 
-impl From<hdf5::Error> for Error {
-    fn from(hdf5_error: hdf5::Error) -> Self {
+impl From<hdf5_metno::Error> for Error {
+    fn from(hdf5_error: hdf5_metno::Error) -> Self {
         Self::Hdf5(hdf5_error)
     }
 }

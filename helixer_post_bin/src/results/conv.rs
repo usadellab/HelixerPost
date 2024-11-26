@@ -1,4 +1,4 @@
-use hdf5::H5Type;
+use hdf5_metno::H5Type;
 use ndarray::ArrayView1;
 
 pub trait ArrayConvFrom<T: Sized + H5Type> {

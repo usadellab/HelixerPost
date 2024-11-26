@@ -1,6 +1,6 @@
 use super::super::{Error, Result};
-use hdf5::types::FixedAscii;
-use hdf5::{Dataset, File};
+use hdf5_metno::types::FixedAscii;
+use hdf5_metno::{Dataset, File};
 use std::path::Path;
 
 //use ndarray::iter::Iter;

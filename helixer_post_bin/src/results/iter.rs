@@ -1,5 +1,5 @@
 use super::BlockID;
-use hdf5::{Dataset, H5Type};
+use hdf5_metno::{Dataset, H5Type};
 
 use ndarray::{s, Array1, Array2, ArrayView1, Axis};
 
@@ -48,7 +48,7 @@ impl<'a, T: H5Type + Clone + Copy> BlockedDataset1D<'a, T> {
         BlockedDataset1DIter::new(&self, block_offsets, rev)
     }
 
-    fn get_data_for_block(&self, block_id: BlockID) -> hdf5::Result<Array1<T>> {
+    fn get_data_for_block(&self, block_id: BlockID) -> hdf5_metno::Result<Array1<T>> {
         let slice = s![block_id.inner(), ..];
         self.dataset.read_slice_1d(slice)
     }
@@ -162,7 +162,7 @@ impl<'a, T: ArrayConvInto<O>, O> BlockedDataset2D<'a, T, O> {
         BlockedDataset2DIter::new(&self, block_offsets, rev)
     }
 
-    fn get_data_for_block(&self, block_id: BlockID) -> hdf5::Result<Array2<T>> {
+    fn get_data_for_block(&self, block_id: BlockID) -> hdf5_metno::Result<Array2<T>> {
         let slice = s![block_id.inner(), .., ..];
         self.dataset.read_slice_2d(slice)
     }
