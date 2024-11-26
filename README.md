@@ -9,9 +9,9 @@ On fedora & co. you will need `hdf5-devel`, while on ubuntu & co. you will need 
 ### hd5 lzf support (Skip if unsure)
 If you need the 'lzf' compression support (no longer needed on recent Helixer versions), you will need to download it from h5py (https://pypi.org/project/h5py/) and manually build it as a shared library and install to the hdf5 plugins directory. This will also require a C toolchain - the system provided GCC should be fine. 
 
-`tar -xzvf h5py-3.2.1.tar.gz`
+`tar -xzvf h5py-3.10.0.tar.gz`
 
-`cd h5py-3.2.1/lzf/`
+`cd h5py-3.10.0/lzf/`
 
 **Fedora**
 
