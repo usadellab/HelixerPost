@@ -1569,7 +1569,7 @@ impl HmmEval {
             state,
             previous_state,
             accum_penalty,
-            trans_penalty,
+            trans_penalty: trans_penalty + 1, // FAKE
             neg_log_prob
         }
     }
@@ -1744,18 +1744,24 @@ pub struct HmmStateRegion {
     end_pos: usize,
     annotation_label: HmmAnnotationLabel,
 
-    trans_penalty: u64, // Transition penalty into each state in the region
+    entry_trans_penalty: u64, // Transition penalty into first state in the region
+    mid_trans_penalty: u64, // Total transition penalty between each state pair inside the region
+    exit_trans_penalty: u64, // Transition penalty out of the final state in the region
+
     neg_log_prob: u64   // Negative Log probability of all bases within this region
 }
 
 impl HmmStateRegion {
     fn new(start_pos: usize, end_pos: usize, annotation_label: HmmAnnotationLabel,
-           trans_penalty: u64, neg_log_prob: u64) -> HmmStateRegion {
+           entry_trans_penalty: u64, mid_trans_penalty: u64, exit_trans_penalty: u64,
+           neg_log_prob: u64) -> HmmStateRegion {
         HmmStateRegion {
             start_pos,
             end_pos,
             annotation_label,
-            trans_penalty,
+            entry_trans_penalty,
+            mid_trans_penalty,
+            exit_trans_penalty,
             neg_log_prob
         }
     }
@@ -1783,6 +1789,7 @@ impl HmmStateRegion {
         let mut coding_length = 0;
 
         for region in regions {
+
             if region.annotation_label == HmmAnnotationLabel::Intergenic {
                 if current_vec.len() > 0 {
                     vec_of_vecs.push((current_vec, coding_length));
@@ -1822,7 +1829,8 @@ impl PredictionHmmSolution {
         let mut eval = &self.eval;
         let mut region_end_pos = eval.end_position;
 
-        let mut accum_trans_penalty = 0u64;
+        let mut boundary_trans_penalty = 0u64;
+        let mut accum_mid_trans_penalty = 0u64;
         let mut accum_neg_log_prob = 0u64;
 
         // State positions are inclusive start, exclusive end: state.start_pos = 0, state.end_pos = 1 is the first real state (almost always)
@@ -1830,25 +1838,36 @@ impl PredictionHmmSolution {
 
         // Extract all but the 'start dummy' HmmEval entry
         while eval.end_position > 0 {
-            accum_trans_penalty += eval.trans_penalty;
+
             accum_neg_log_prob += eval.neg_log_prob;
 
-            if eval.state.get_annotation_label() != eval.previous_state.get_annotation_label()
-            // If prev state changes annotation label
-            {
-                println!("Generate a standard HmmStateRegion S: {} E: {} Label: {} Trans: {} NegLog: {}",
+            if eval.state.get_annotation_label() == eval.previous_state.get_annotation_label() { // If prev state matches annotation label
+                accum_mid_trans_penalty += eval.trans_penalty;
+
+            } else {
+                let neg_log_rate = accum_neg_log_prob / ((region_end_pos - eval.start_position) as u64);
+
+                let entry_trans_penalty = eval.trans_penalty;
+                let exit_trans_penalty = boundary_trans_penalty;
+
+                println!("Generate a standard HmmStateRegion S: {} E: {} Label: {} Trans: {} {} {} NegLog: {} {}",
                          eval.start_position, region_end_pos, eval.state.get_annotation_label().to_str(),
-                         accum_trans_penalty, accum_neg_log_prob);
+                         entry_trans_penalty, accum_mid_trans_penalty, exit_trans_penalty,
+                         accum_neg_log_prob, neg_log_rate);
 
                 regions.push(HmmStateRegion::new(
                     eval.start_position,
                     region_end_pos,
                     eval.state.get_annotation_label(),
-                    accum_trans_penalty,
+                    entry_trans_penalty,
+                    accum_mid_trans_penalty,
+                    exit_trans_penalty,
                     accum_neg_log_prob
                 ));
                 region_end_pos = eval.start_position; // Equivalent to previous_state.end_position
-                accum_trans_penalty = 0;
+
+                boundary_trans_penalty = entry_trans_penalty;
+                accum_mid_trans_penalty = 0;
                 accum_neg_log_prob = 0;
             }
 
@@ -1860,14 +1879,23 @@ impl PredictionHmmSolution {
 
         // Drain accumulated intergenic region if non-zero length (almost always)
         if region_end_pos > 0 {
-            println!("Generate a starting Intergenic HmmStateRegion S: {} E: {} Label: {} Trans: {} NegLog: {}",
+            let neg_log_rate = accum_neg_log_prob / (region_end_pos as u64);
+
+            let entry_trans_penalty = eval.trans_penalty;
+            let exit_trans_penalty = boundary_trans_penalty;
+
+            println!("Generate a starting Intergenic HmmStateRegion S: {} E: {} Label: {} Trans: {} {} {} NegLog: {} {}",
                      0, region_end_pos, eval.state.get_annotation_label().to_str(),
-                     accum_trans_penalty, accum_neg_log_prob);
+                     entry_trans_penalty, accum_mid_trans_penalty, exit_trans_penalty,
+                     accum_neg_log_prob, neg_log_rate);
+
             regions.push(HmmStateRegion::new(
                 eval.start_position,
                 region_end_pos,
                 eval.state.get_annotation_label(),
-                accum_trans_penalty,
+                entry_trans_penalty,
+                accum_mid_trans_penalty,
+                exit_trans_penalty,
                 accum_neg_log_prob
             ));
         }

@@ -1,3 +1,6 @@
+use threadpool::ThreadPool;
+use std::sync::mpsc::channel;
+
 use crate::analysis::extractor::{BasePredictionExtractor, ComparisonExtractor};
 use crate::analysis::gff_conv::hmm_solution_to_gff;
 use crate::analysis::hmm::{HmmStateRegion, PredictionHmm};
@@ -21,6 +24,7 @@ pub struct Analyzer<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<Ph
     edge_threshold: f32,
     peak_threshold: f32,
     min_coding_length: usize,
+    thread_pool: ThreadPool,
 }
 
 impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
@@ -33,7 +37,10 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
         edge_threshold: f32,
         peak_threshold: f32,
         min_coding_length: usize,
+        thread_count: usize,
     ) -> Analyzer<'a, TC, TP> {
+        let thread_pool = ThreadPool::new(thread_count);
+
         Analyzer {
             bp_extractor,
             comp_extractor,
@@ -41,6 +48,7 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
             edge_threshold,
             peak_threshold,
             min_coding_length,
+            thread_pool
         }
     }
 
@@ -61,16 +69,29 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
         let mut window_count = 0;
         let mut window_length_total = 0;
 
+        let (tx, rx) = channel();
+
         for (bp_vec, _total_vec, start_pos, _peak) in bp_iter {
             window_count += 1;
             window_length_total += bp_vec.len();
 
             let end_pos = start_pos + bp_vec.len();
+            println!("Queuing a window from {} to {} (length: {})", start_pos, end_pos, bp_vec.len());
 
-            println!("Solving a window from {} to {} (length: {})", start_pos, end_pos, bp_vec.len());
+            let tx = tx.clone();
+            self.thread_pool.execute(move || {
+                let len = bp_vec.len();
+                let hmm = PredictionHmm::new(bp_vec);
+                let maybe_solution = hmm.solve();
+                tx.send((start_pos, end_pos, maybe_solution)).expect("channel should work");
 
-            let hmm = PredictionHmm::new(bp_vec);
-            let maybe_solution = hmm.solve();
+                println!("Solved a window from {} to {} (length: {})", start_pos, end_pos, len);
+            });
+        }
+
+        for _ in 0..window_count {
+            let (start_pos, end_pos, maybe_solution) =
+                rx.recv().expect("Lost a window");
 
             if let Some(solution) = maybe_solution {
                 //solution.dump(start_pos);
@@ -108,6 +129,7 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
                 );
             }
         }
+
 
         (window_count, window_length_total)
     }
@@ -153,7 +175,7 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
         );
         let fwd_seq_rating = fwd_comp_rater.calculate_stats();
         println!(
-            "Forward for Sequence {} - ID {}",
+            "Rating for Sequence {} - ID {} - Forward",
             seq.get_name(),
             id.inner()
         );
@@ -184,7 +206,7 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
         );
         let rev_seq_rating = rev_comp_rater.calculate_stats();
         println!(
-            "Reverse for Sequence {} - ID {}",
+            "Rating for Sequence {} - ID {} - Reverse",
             seq.get_name(),
             id.inner()
         );
@@ -192,9 +214,9 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
 
         rev_rating.accumulate(&rev_seq_rating);
 
-        (
-            fwd_window_count + rev_window_count,
-            fwd_window_length_total + rev_window_length_total,
-        )
+        let total_windows = fwd_window_count + rev_window_count;
+        let total_window_length = fwd_window_length_total + rev_window_length_total;
+
+        (total_windows, total_window_length)
     }
 }

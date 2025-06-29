@@ -13,8 +13,8 @@ use std::process::exit;
 fn main() {
     let arg_vec = std::env::args().collect::<Vec<_>>(); // Arg iterator into vector
 
-    if arg_vec.len() != 8 {
-        println!("HelixerPost <genome.h5> <predictions.h5> <windowSize> <edgeThresh> <peakThresh> <minCodingLength> <gff>");
+    if arg_vec.len() != 9 {
+        println!("HelixerPost <genome.h5> <predictions.h5> <windowSize> <edgeThresh> <peakThresh> <minCodingLength> <threads> <gff>");
         exit(1);
     }
 
@@ -24,7 +24,8 @@ fn main() {
     let edge_threshold = arg_vec[4].parse().unwrap();
     let peak_threshold = arg_vec[5].parse().unwrap();
     let min_coding_length = arg_vec[6].parse().unwrap();
-    let gff_filename = &arg_vec[7];
+    let thread_count = arg_vec[7].parse().unwrap();
+    let gff_filename = &arg_vec[8];
 
     let helixer_res = HelixerResults::new(predictions_path.as_ref(), genome_path.as_ref())
         .expect("Failed to open input files");
@@ -42,6 +43,7 @@ fn main() {
         edge_threshold,
         peak_threshold,
         min_coding_length,
+        thread_count
     );
 
     let mut total_count = 0;
