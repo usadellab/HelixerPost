@@ -90,7 +90,7 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
             window_count += 1;
         }
 
-        let results = Vec::with_capacity(window_count);
+        let mut results = Vec::with_capacity(window_count);
 
         for _ in 0..window_count {
             let (index, start_pos, end_pos, maybe_solution) =
