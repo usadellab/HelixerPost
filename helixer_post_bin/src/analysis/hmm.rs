@@ -1569,7 +1569,8 @@ impl HmmEval {
             state,
             previous_state,
             accum_penalty,
-            trans_penalty: trans_penalty + 1, // FAKE
+            //trans_penalty: trans_penalty + 1, // FAKE
+            trans_penalty,
             neg_log_prob
         }
     }

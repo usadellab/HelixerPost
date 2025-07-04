@@ -72,7 +72,6 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
         let (tx, rx) = channel();
 
         for (bp_vec, _total_vec, start_pos, _peak) in bp_iter {
-            window_count += 1;
             window_length_total += bp_vec.len();
 
             let end_pos = start_pos + bp_vec.len();
@@ -83,15 +82,23 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
                 let len = bp_vec.len();
                 let hmm = PredictionHmm::new(bp_vec);
                 let maybe_solution = hmm.solve();
-                tx.send((start_pos, end_pos, maybe_solution)).expect("channel should work");
+                tx.send((window_count, start_pos, end_pos, maybe_solution)).expect("channel should work");
 
                 println!("Solved a window from {} to {} (length: {})", start_pos, end_pos, len);
             });
+
+            window_count += 1;
         }
 
+        let results = Vec::with_capacity(window_count);
+
         for _ in 0..window_count {
-            let (start_pos, end_pos, maybe_solution) =
+            let (index, start_pos, end_pos, maybe_solution) =
                 rx.recv().expect("Lost a window");
+            results[index]=(start_pos, end_pos, maybe_solution)
+        }
+
+        for (start_pos, end_pos, maybe_solution) in results.into_iter() {
 
             if let Some(solution) = maybe_solution {
                 //solution.dump(start_pos);
