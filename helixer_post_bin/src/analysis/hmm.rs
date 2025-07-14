@@ -877,7 +877,8 @@ impl HmmState {
             HmmPrimaryState::Start0 | HmmPrimaryState::Stop0T =>
                 (pred.get_coding_phase0_neg_log_prob(), pred.get_coding_phase0_penalty()),
 
-            HmmPrimaryState::Coding1 => (pred.get_coding_phase2_penalty(), pred.get_coding_phase2_neg_log_prob()),
+            //HmmPrimaryState::Coding1 => (pred.get_coding_phase2_penalty(), pred.get_coding_phase2_neg_log_prob()),
+            HmmPrimaryState::Coding1 => (pred.get_coding_phase2_neg_log_prob(), pred.get_coding_phase2_penalty()),
             HmmPrimaryState::Start1 | HmmPrimaryState::Stop1TA | HmmPrimaryState::Stop1TG =>
                 (pred.get_coding_phase2_neg_log_prob(), pred.get_coding_phase2_penalty()),
 
