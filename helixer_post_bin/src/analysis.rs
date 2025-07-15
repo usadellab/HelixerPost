@@ -4,7 +4,7 @@ use std::sync::mpsc::channel;
 use crate::analysis::extractor::{BasePredictionExtractor, ComparisonExtractor};
 use crate::analysis::gff_conv::hmm_solution_to_gff;
 use crate::analysis::hmm::{HmmStateRegion, PredictionHmm};
-use crate::analysis::rater::{SequenceRater, SequenceRating};
+use crate::analysis::rater::{RatingWriter, SequenceRater, SequenceRating};
 use crate::analysis::window::BasePredictionWindowThresholdIterator;
 use crate::gff::GffWriter;
 use crate::results::conv::{ArrayConvInto, ClassPrediction, PhasePrediction};
@@ -109,10 +109,10 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
                 let genes = HmmStateRegion::split_genes(solution_regions);
 
                 for (gene_regions, coding_length) in genes.iter() {
-                    rater.rate_regions(
+                    rater.rate_window_regions(
                         start_pos,
                         &gene_regions,
-                        *coding_length < self.min_coding_length,
+                        (*coding_length < self.min_coding_length) && (*coding_length > 0),
                     );
                 }
 
@@ -144,14 +144,15 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
         (window_count, window_length_total)
     }
 
-    pub fn process_sequence<W: Write>(
+    pub fn process_sequence<GW: Write, RW: Write>(
         &self,
         species: &Species,
         seq: &Sequence,
         fwd_rating: &mut SequenceRating,
         rev_rating: &mut SequenceRating,
-        gff_writer: &mut GffWriter<W>,
-    ) -> (usize, usize) {
+        gff_writer: &mut GffWriter<GW>,
+        rating_writer: &mut RatingWriter<RW>
+    ) -> std::io::Result<(usize, usize)> {
         let id = seq.get_id();
         println!(
             "  BP_Extractor for Sequence {} - ID {}",
@@ -183,7 +184,7 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
             &mut fwd_comp_rater,
             gff_writer,
         );
-        let fwd_seq_rating = fwd_comp_rater.calculate_stats();
+        let fwd_seq_rating = fwd_comp_rater.calculate_stats(species, seq, false, rating_writer)?;
         println!(
             "Rating for Sequence {} - ID {} - Forward",
             seq.get_name(),
@@ -214,7 +215,7 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
             &mut rev_comp_rater,
             gff_writer,
         );
-        let rev_seq_rating = rev_comp_rater.calculate_stats();
+        let rev_seq_rating = rev_comp_rater.calculate_stats(species, seq, false, rating_writer)?;
         println!(
             "Rating for Sequence {} - ID {} - Reverse",
             seq.get_name(),
@@ -227,6 +228,6 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
         let total_windows = fwd_window_count + rev_window_count;
         let total_window_length = fwd_window_length_total + rev_window_length_total;
 
-        (total_windows, total_window_length)
+        Ok((total_windows, total_window_length))
     }
 }

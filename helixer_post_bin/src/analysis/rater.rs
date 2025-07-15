@@ -1,7 +1,8 @@
+use std::io::{BufWriter, Write};
 use crate::analysis::extractor::ComparisonIterator;
 use crate::analysis::hmm::{HmmAnnotationLabel, HmmStateRegion};
 use crate::results::conv::{ClassPrediction, ClassReference, PhasePrediction, PhaseReference};
-
+use crate::results::{Sequence, Species};
 /*
     Rows are based on 'reference', Columns are based on 'prediction'
 
@@ -191,7 +192,7 @@ impl<'a> SequenceRater<'a> {
         }
     }
 
-    pub fn rate_regions(
+    pub fn rate_window_regions(
         &mut self,
         start_offset: usize,
         gene_regions: &[HmmStateRegion],
@@ -209,6 +210,8 @@ impl<'a> SequenceRater<'a> {
             let mut coding_annotation = Annotation::CodingPhase0;
 
             for region in gene_regions {
+                println!("Rating region {} {} {}", region.get_start_pos(), region.get_end_pos(), region.get_annotation_label().to_str());
+
                 if region.get_annotation_label() != HmmAnnotationLabel::Coding {
                     let annotation = match region.get_annotation_label() {
                         HmmAnnotationLabel::Intergenic => Annotation::Intergenic,
@@ -247,11 +250,11 @@ impl<'a> SequenceRater<'a> {
         }
     }
 
-    pub fn calculate_stats(self) -> SequenceRating {
+    pub fn calculate_stats<RW: Write>(self, species: &Species, seq: &Sequence, rev: bool, rating_writer: &mut RatingWriter<RW>) -> std::io::Result<SequenceRating> {
         let mut rating = SequenceRating::new();
-        rating.rate(self.comp_iterator, self.annotation);
+        rating.rate(self.comp_iterator, self.annotation, species, seq, rev, rating_writer)?;
 
-        rating
+        Ok(rating)
     }
 }
 
@@ -307,9 +310,12 @@ impl SequenceRating {
         self.filtered_count += other.filtered_count;
     }
 
-    fn rate(&mut self, comp_iterator: ComparisonIterator, annotation: Vec<Annotation>) {
-        for ((class_ref, phase_ref, class_ml, phase_ml), annotation) in
-            comp_iterator.zip(annotation.into_iter())
+    fn rate<RW: Write>(&mut self, comp_iterator: ComparisonIterator, annotation: Vec<Annotation>,
+                       species: &Species, seq: &Sequence, rev: bool, rating_writer: &mut RatingWriter<RW>) -> std::io::Result<()> {
+        let has_ref = comp_iterator.has_ref();
+
+        for (idx, ((class_ref, phase_ref, class_ml, phase_ml), annotation)) in
+            comp_iterator.zip(annotation.into_iter()).enumerate()
         {
             let ref_class_idx = class_ref.get_class_idx();
             let ref_phase_idx = phase_ref.get_phase_idx();
@@ -342,7 +348,16 @@ impl SequenceRating {
                     _ => (),
                 }
             }
+
+            if has_ref {
+                rating_writer.write(species, seq, rev, idx, Some(&class_ref), Some(&phase_ref), &class_ml, &phase_ml, annotation)?;
+            }
+            else {
+                rating_writer.write(species, seq, rev, idx, None, None, &class_ml, &phase_ml, annotation)?;
+            }
         }
+
+        Ok(())
     }
 
     const CLASS_NAMES: [&'static str; 4] = ["Intergenic", "UTR", "Coding", "Intron"];
@@ -495,6 +510,65 @@ impl SequenceRating {
         );
     }
 }
+
+
+pub struct RatingWriter<W: Write> {
+    writer: BufWriter<W>,
+}
+
+const CLASS_NAMES: [&str; 4] = ["IG", "UTR", "CDS", "INT"];
+const PHASE_NAMES: [&str; 4] = ["NP", "P0", "P1", "P2"];
+
+impl<W: Write> RatingWriter<W> {
+    pub fn new(writer: BufWriter<W>) -> RatingWriter<W> {
+        RatingWriter { writer }
+    }
+
+    fn write(&mut self, _species: &Species, seq: &Sequence, rev: bool, pos: usize,
+                 class_ref: Option<&ClassReference>, phase_ref: Option<&PhaseReference>,
+                 class_ml: &ClassPrediction, phase_ml: &PhasePrediction,
+                 annotation: Annotation) -> std::io::Result<()> {
+//write!(self.writer, "# {}\n", helixer_model_md5sum)?; println!("{:.3}", x)
+
+        let rev = if rev {"-"} else {"+"};
+
+        let (class_ref_str, class_ref_scores) = if let Some(class_ref) = class_ref {
+            let class_ref_str = CLASS_NAMES[class_ref.get_class_idx()];
+            let class_ref_vals = class_ref.get();
+            let class_ref_scores = format!("{},{},{},{}", class_ref_vals[0], class_ref_vals[1], class_ref_vals[2], class_ref_vals[3]);
+            (class_ref_str, class_ref_scores)
+        }
+        else {
+            ("-", String::from("-,-,-,-"))
+        };
+
+        let class_ml_str = CLASS_NAMES[class_ml.get_class_idx()];
+        let class_ml_vals = class_ml.get();
+        let class_ml_scores = format!("{:.3},{:.3},{:.3},{:.3}", class_ml_vals[0], class_ml_vals[1], class_ml_vals[2], class_ml_vals[3]);
+
+        let (phase_ref_str, phase_ref_scores) = if let Some(phase_ref) = phase_ref {
+            let phase_ref_str = PHASE_NAMES[phase_ref.get_phase_idx()];
+            let phase_ref_vals = phase_ref.get();
+            let phase_ref_scores = format!("{},{},{},{}", phase_ref_vals[0], phase_ref_vals[1], phase_ref_vals[2], phase_ref_vals[3]);
+            (phase_ref_str, phase_ref_scores)
+        } else {
+            ("-", String::from("-,-,-,-"))
+        };
+
+        let phase_ml_str = PHASE_NAMES[phase_ml.get_phase_idx()];
+        let phase_ml_vals = phase_ml.get();
+        let phase_ml_scores = format!("{:.3},{:.3},{:.3},{:.3}", phase_ml_vals[0], phase_ml_vals[1], phase_ml_vals[2], phase_ml_vals[3]);
+
+        writeln!(self.writer, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+               seq.get_name(), rev, pos,
+               class_ref_str, class_ref_scores, class_ml_str, class_ml_scores,
+               phase_ref_str, phase_ref_scores, phase_ml_str, phase_ml_scores,
+               annotation.to_str())?;
+
+        Ok(())
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

@@ -1802,9 +1802,9 @@ impl HmmStateRegion {
                 if region.annotation_label == HmmAnnotationLabel::Coding {
                     coding_length += region.end_pos - region.start_pos;
                 }
-
-                current_vec.push(region);
             }
+
+            current_vec.push(region);
         }
 
         if current_vec.len() > 0 {

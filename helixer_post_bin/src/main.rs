@@ -1,6 +1,6 @@
 use helixer_post_bin::analysis::extractor::{BasePredictionExtractor, ComparisonExtractor};
 use helixer_post_bin::analysis::hmm::show_hmm_config;
-use helixer_post_bin::analysis::rater::SequenceRating;
+use helixer_post_bin::analysis::rater::{RatingWriter, SequenceRating};
 use helixer_post_bin::analysis::Analyzer;
 use helixer_post_bin::gff::GffWriter;
 use helixer_post_bin::results::raw::RawHelixerPredictions;
@@ -13,8 +13,8 @@ use std::process::exit;
 fn main() {
     let arg_vec = std::env::args().collect::<Vec<_>>(); // Arg iterator into vector
 
-    if arg_vec.len() != 9 {
-        println!("HelixerPost <genome.h5> <predictions.h5> <windowSize> <edgeThresh> <peakThresh> <minCodingLength> <threads> <gff>");
+    if arg_vec.len() != 10 {
+        println!("HelixerPost <genome.h5> <predictions.h5> <windowSize> <edgeThresh> <peakThresh> <minCodingLength> <threads> <gff> <rating>");
         exit(1);
     }
 
@@ -26,6 +26,7 @@ fn main() {
     let min_coding_length = arg_vec[6].parse().unwrap();
     let thread_count = arg_vec[7].parse().unwrap();
     let gff_filename = &arg_vec[8];
+    let rating_filename = &arg_vec[9];
 
     let helixer_res = HelixerResults::new(predictions_path.as_ref(), genome_path.as_ref())
         .expect("Failed to open input files");
@@ -72,6 +73,9 @@ fn main() {
             gff_filename
         ));
 
+    let rating_file = File::create(rating_filename).unwrap();
+    let mut rating_writer = RatingWriter::new(BufWriter::new(rating_file));
+
     for species in helixer_res.get_all_species() {
         let mut fwd_species_rating = SequenceRating::new();
         let mut rev_species_rating = SequenceRating::new();
@@ -97,7 +101,8 @@ fn main() {
                 &mut fwd_species_rating,
                 &mut rev_species_rating,
                 &mut gff_writer,
-            );
+                &mut rating_writer
+            ).expect("Failed to process sequence");
 
             total_count += count;
             total_length += length;
