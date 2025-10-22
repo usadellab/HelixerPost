@@ -31,7 +31,7 @@ If you need the 'lzf' compression support (no longer needed on recent Helixer ve
 
 ## Building HelixerPost
 
-`git clone https://github.com/TonyBolger/HelixerPost.git`
+`git clone https://github.com/usadellab/HelixerPost.git`
 
 `cd HelixerPost`
 
