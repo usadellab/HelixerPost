@@ -1,6 +1,6 @@
 use crate::results::conv::{Bases, ClassPrediction, PhasePrediction};
 use serde::{Deserialize, Serialize};
-use std::cmp::{min, Ordering};
+use std::cmp::{max, Ordering};
 use std::collections::BinaryHeap;
 
 
@@ -1002,9 +1002,9 @@ impl HmmState {
         let (_, intron) = self.get_component_states();
 
         match intron {
-            HmmIntronState::U2GtAgDSS => min(mil.u2_gt_ag, 2) - 1,
-            HmmIntronState::U2GcAgDSS =>  min(mil.u2_gc_ag, 2) - 1,
-            HmmIntronState::U12AtAcDSS =>  min(mil.u12_at_ac, 2) - 1,
+            HmmIntronState::U2GtAgDSS => max(mil.u2_gt_ag, 2) - 1,
+            HmmIntronState::U2GcAgDSS => max(mil.u2_gc_ag, 2) - 1,
+            HmmIntronState::U12AtAcDSS => max(mil.u12_at_ac, 2) - 1,
             _ => 1,
         }
     }
