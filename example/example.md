@@ -10,11 +10,25 @@ and base-wise genic predictions (predictions.h5) were created with `HybridModel.
 both from the Helixer project (https://github.com/weberlab-hhu/Helixer).
 
 ## usage
-From this directory
+From this directory:
 
 ```
-helixer_post_bin genome_data.h5 predictions.h5 100 0.1 0.8 60 output.gff3
+helixer_post_bin genome_data.h5 predictions.h5 output.gff3
 ```
+
+The same result is obtained by explicitly passing the bundled config file
+(which holds the binary's built-in defaults — see `default_config.yml`):
+
+```
+helixer_post_bin --config default_config.yml genome_data.h5 predictions.h5 output.gff3
+```
+
+A rating / stats file is also produced. By default it is written alongside the
+GFF as `<gff>.rating`; pass `--rating <path>` to override.
+
+CLI flags override values from `--config` which override the built-in defaults.
+Run `helixer_post_bin --help` for the full flag list, and
+`helixer_post_bin --print-default-config` to dump a starting YAML template.
 
 ## expected output
 

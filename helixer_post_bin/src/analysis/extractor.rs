@@ -329,6 +329,8 @@ impl<'a> ComparisonIterator<'a> {
         self.sequence_id
     }
 
+    pub fn has_ref(&self) -> bool { self.has_ref }
+
     pub fn get_rc(&self) -> bool {
         self.rc
     }
