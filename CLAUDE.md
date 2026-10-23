@@ -49,7 +49,7 @@ The pipeline is roughly: HDF5 → blocked datasets → per-sequence iterators �
 
 ### `results/` — HDF5 input layer
 
-- `results/raw/{genome,predictions}.rs`: thin wrappers around the two HDF5 files. `RawHelixerPredictions` reads `predictions.h5` (class + phase probabilities, model_md5sum attribute); `RawHelixerGenome` reads `genome_data.h5` (one-hot bases X, optional reference Y/phases, sample weights, species/seqid metadata).
+- `results/raw/{genome,predictions}.rs`: thin wrappers around the two HDF5 files. `RawHelixerPredictions` reads `predictions.h5` (class + phase probabilities, `model_md5sum` and `helixer_version` attributes; the latter is absent in files from Helixer <= 0.3.7); `RawHelixerGenome` reads `genome_data.h5` (one-hot bases X, optional reference Y/phases, sample weights, species/seqid metadata).
 - `results/index.rs`: `HelixerIndex` walks the genome metadata once at startup, builds `Species`/`Sequence`/`BlockID` tables, and produces forward/reverse block-ID lists per sequence. Both block count and blocksize come from the predictions file (`get_blocks_and_blocksize`), and the genome is opened against those dimensions — predictions and genome must agree.
 - `results/conv.rs`: `ArrayConvInto` and the typed wrappers (`Bases`, `ClassPrediction`, `PhasePrediction`, `ClassReference`, `PhaseReference`, `Transitions`). The same physical dataset can be viewed as predictions (`f32`) or pseudo-predictions derived from references (`i8`) — this is why extractors and most generics are parameterized on `TC: ArrayConvInto<ClassPrediction>` and `TP: ArrayConvInto<PhasePrediction>`.
 - `results/iter.rs`: `BlockedDataset1D`/`BlockedDataset2D` provide block-by-block streaming over the typed datasets without loading the full HDF5 file into memory.
@@ -85,4 +85,4 @@ Things to keep in mind when editing the pipeline:
 
 ### `gff.rs` — output
 
-Stateless GFF3 writer. `write_global_header` emits the `##gff-version`, optional `##species`, and the `model_md5sum` comment from the predictions HDF5; `write_region_header` emits one `##sequence-region` per input sequence; `write_records` streams a `Vec<GffRecord>` for a single gene group.
+Stateless GFF3 writer. `write_global_header` emits the `##gff-version`, optional `##species`, the `model_md5sum` comment from the predictions HDF5, and `# Helixer version <v>` (from the `helixer_version` attribute, `unknown` if absent) plus `# HelixerPost version <crate version>` comments; `write_region_header` emits one `##sequence-region` per input sequence; `write_records` streams a `Vec<GffRecord>` for a single gene group.

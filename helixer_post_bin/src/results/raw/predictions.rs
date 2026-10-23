@@ -23,18 +23,28 @@ impl RawHelixerPredictions {
     }
 
     pub fn get_model_md5sum(&self) -> Result<String> {
+        self.get_string_attr("model_md5sum")
+    }
 
-        let attr = match self.predictions_file.attr("model_md5sum") {
+    /// Version of Helixer that wrote the predictions; absent in files from Helixer <= 0.3.7.
+    pub fn get_helixer_version(&self) -> Result<String> {
+        self.get_string_attr("helixer_version")
+    }
+
+    fn get_string_attr(&self, name: &str) -> Result<String> {
+        let attr = match self.predictions_file.attr(name) {
             Ok(a) => a,
             Err(e) => {
-                return Err(Error::from_ctx("reading 'model_md5sum' attribute from predictions HDF5", e))
+                let ctx = format!("reading '{name}' attribute from predictions HDF5");
+                return Err(Error::from_ctx(&ctx, e))
             }
         };
 
         let r: VarLenUnicode = match attr.as_reader().read_scalar() {
             Ok(r) => r,
             Err(e) => {
-                return Err(Error::from_ctx("reading 'model_md5sum' attribute value from predictions HDF5", e))
+                let ctx = format!("reading '{name}' attribute value from predictions HDF5");
+                return Err(Error::from_ctx(&ctx, e))
             }
         };
 

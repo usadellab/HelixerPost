@@ -194,17 +194,21 @@ impl<W: Write> GffWriter<W> {
     }
 
     /// Writes header for the top of the GFF3 file
-    /// and optionally includes species name and Helixer model info
+    /// and optionally includes species name and Helixer model info,
+    /// followed by the Helixer and HelixerPost versions
     ///
     /// # Arguments
     ///
     /// * `species` - An Option containing the species name
     /// * `helixer_model_md5sum` - An Option containing the md5checksum
     /// and file path information from Helixer (as found in h5.attrs\["model_md5sum"\] in the predictions output.)
+    /// * `helixer_version` - An Option containing the Helixer version that wrote the predictions
+    /// (h5.attrs\["helixer_version"\]); written as "unknown" when absent
     pub fn write_global_header(
         &mut self,
         species: Option<&str>,
         helixer_model_md5sum: Option<String>,
+        helixer_version: Option<String>,
     ) -> std::io::Result<()> {
         const GFF_VERSION: &'static str = "3.2.1";
         write!(self.writer, "##gff-version {}\n", GFF_VERSION)?;
@@ -214,6 +218,12 @@ impl<W: Write> GffWriter<W> {
         if let Some(helixer_model_md5sum) = helixer_model_md5sum {
             write!(self.writer, "# {}\n", helixer_model_md5sum)?;
         }
+        write!(
+            self.writer,
+            "# Helixer version {}\n",
+            helixer_version.as_deref().unwrap_or("unknown")
+        )?;
+        write!(self.writer, "# HelixerPost version {}\n", env!("CARGO_PKG_VERSION"))?;
         Ok(())
     }
 

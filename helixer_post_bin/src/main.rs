@@ -193,12 +193,13 @@ fn main() -> Result<()> {
     }
 
     let rhg = RawHelixerPredictions::new(&predictions_path)
-        .context("re-opening predictions HDF5 for model_md5sum lookup")?;
+        .context("re-opening predictions HDF5 for model_md5sum / helixer_version lookup")?;
     let model_md5sum = rhg.get_model_md5sum().ok();
+    let helixer_version = rhg.get_helixer_version().ok();
     let species_name = all_species.first().map(|x| x.get_name());
 
     gff_writer
-        .write_global_header(species_name, model_md5sum)
+        .write_global_header(species_name, model_md5sum, helixer_version)
         .with_context(|| format!("writing GFF header to {}", gff_path.display()))?;
 
     let mut rating_writer = match &cli.rating {
