@@ -23,8 +23,8 @@ The same result is obtained by explicitly passing the bundled config file
 helixer_post_bin --config default_config.yml genome_data.h5 predictions.h5 output.gff3
 ```
 
-A rating / stats file is also produced. By default it is written alongside the
-GFF as `<gff>.rating`; pass `--rating <path>` to override.
+Summary rating stats are printed to stdout. A per-base rating file is only
+written when `--rating <path>` is given.
 
 CLI flags override values from `--config` which override the built-in defaults.
 Run `helixer_post_bin --help` for the full flag list, and

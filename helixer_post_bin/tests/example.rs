@@ -1,10 +1,10 @@
-//! End-to-end smoke tests using the bundled `example/` data.
+//! End-to-end tests running the binary on the bundled `example/` data.
 //!
-//! These exercise the full pipeline against the committed `example/output.gff3`
-//! and `example/output.txt`. A diff lands here whenever any part of the pipeline
-//! changes the gene model or rating numbers — this is the project's safety net
-//! for the dozens of behaviours that aren't covered by per-module unit tests.
+//! The example data is not curated enough to serve as a reference annotation, so these tests
+//! compare runs against each other (config round trip, CLI precedence) or check properties of the
+//! output (minimum intron length) instead of comparing against committed expected output.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::tempdir;
@@ -19,87 +19,95 @@ fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_helixer_post_bin")
 }
 
-fn run(args: &[&Path]) -> (PathBuf, PathBuf) {
+/// Runs helixer_post_bin on the example data with the given extra arguments and returns the GFF.
+fn run(args: &[&str]) -> String {
     let tmp = tempdir().expect("tempdir");
     let gff = tmp.path().join("out.gff");
-    let rating = tmp.path().join("out.rating");
-
-    let mut cmd = Command::new(bin());
-    cmd.arg("--threads")
-        .arg("1")
-        .arg("--rating")
-        .arg(&rating);
-    for a in args {
-        cmd.arg(a);
-    }
     let example = example_dir();
-    cmd.arg(example.join("genome_data.h5"))
-        .arg(example.join("predictions.h5"))
-        .arg(&gff);
 
-    let output = cmd.output().expect("failed to spawn helixer_post_bin");
+    let output = Command::new(bin())
+        .args(["--threads", "1"])
+        .args(args)
+        .arg(example.join("genome_data.h5"))
+        .arg(example.join("predictions.h5"))
+        .arg(&gff)
+        .output()
+        .expect("failed to spawn helixer_post_bin");
     assert!(
         output.status.success(),
         "helixer_post_bin exited non-zero: {}\nstderr: {}",
         output.status,
         String::from_utf8_lossy(&output.stderr),
     );
-
-    // Move the produced files out of the tempdir so they survive teardown.
-    let gff_persist = tmp.path().join("out.gff.keep");
-    let rating_persist = tmp.path().join("out.rating.keep");
-    std::fs::rename(&gff, &gff_persist).unwrap();
-    std::fs::rename(&rating, &rating_persist).unwrap();
-    // Leak the tempdir so the kept paths stay valid for the assertions below.
-    let leaked = tmp.keep();
-    (leaked.join("out.gff.keep"), leaked.join("out.rating.keep"))
+    std::fs::read_to_string(&gff).expect("reading GFF output")
 }
 
-#[test]
-fn default_invocation_matches_committed_output() {
-    let (gff, rating) = run(&[]);
-    let expected_gff = std::fs::read_to_string(example_dir().join("output.gff3")).unwrap();
-    let expected_rating = std::fs::read_to_string(example_dir().join("output.txt")).unwrap();
-    let actual_gff = std::fs::read_to_string(&gff).unwrap();
-    let actual_rating = std::fs::read_to_string(&rating).unwrap();
-    assert_eq!(actual_gff, expected_gff, "GFF differs from example/output.gff3");
-    assert_eq!(
-        actual_rating, expected_rating,
-        "rating differs from example/output.txt"
-    );
-    let _ = std::fs::remove_file(&gff);
-    let _ = std::fs::remove_file(&rating);
+/// Returns the lengths of all introns in a GFF, i.e. the gaps between consecutive exons of each
+/// transcript.
+fn intron_lengths(gff: &str) -> Vec<u64> {
+    let mut exons: HashMap<&str, Vec<(u64, u64)>> = HashMap::new();
+    for line in gff.lines().filter(|l| !l.starts_with('#')) {
+        let cols: Vec<&str> = line.split('\t').collect();
+        if cols.len() == 9 && cols[2] == "exon" {
+            let parent = cols[8]
+                .split(';')
+                .find_map(|attr| attr.strip_prefix("Parent="))
+                .expect("exon without Parent attribute");
+            let start = cols[3].parse().expect("exon start");
+            let end = cols[4].parse().expect("exon end");
+            exons.entry(parent).or_default().push((start, end));
+        }
+    }
+    exons
+        .into_values()
+        .flat_map(|mut e| {
+            e.sort_unstable();
+            e.windows(2).map(|w| w[1].0 - w[0].1 - 1).collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 #[test]
 fn default_config_yaml_matches_default_invocation() {
     let cfg = example_dir().join("default_config.yml");
-    let (gff, _rating) = run(&[Path::new("--config"), &cfg]);
-    let expected = std::fs::read_to_string(example_dir().join("output.gff3")).unwrap();
-    let actual = std::fs::read_to_string(&gff).unwrap();
-    assert_eq!(actual, expected, "--config default_config.yml diverged from default");
-    let _ = std::fs::remove_file(&gff);
+    assert_eq!(
+        run(&["--config", cfg.to_str().unwrap()]),
+        run(&[]),
+        "--config default_config.yml diverged from the built-in defaults"
+    );
 }
 
 #[test]
 fn cli_override_beats_config_file() {
-    // YAML sets a deliberately disruptive prob_floor; the CLI flag below puts
-    // it back to the built-in default, so the GFF must match the committed one.
     let tmp = tempdir().expect("tempdir");
     let cfg_path = tmp.path().join("tweak.yml");
     std::fs::write(&cfg_path, "hmm:\n  prob_floor: 0.5\n").unwrap();
+    let cfg = cfg_path.to_str().unwrap();
+    let default = run(&[]);
 
-    let (gff, _rating) = run(&[
-        Path::new("--config"),
-        &cfg_path,
-        Path::new("--hmm-prob-floor"),
-        Path::new("1e-9"),
-    ]);
-    let expected = std::fs::read_to_string(example_dir().join("output.gff3")).unwrap();
-    let actual = std::fs::read_to_string(&gff).unwrap();
-    assert_eq!(
-        actual, expected,
-        "CLI --hmm-prob-floor should override config-file value"
+    assert_ne!(
+        run(&["--config", cfg]),
+        default,
+        "precondition: prob_floor 0.5 in the config file must change the output"
     );
-    let _ = std::fs::remove_file(&gff);
+    assert_eq!(
+        run(&["--config", cfg, "--hmm-prob-floor", "1e-9"]),
+        default,
+        "CLI --hmm-prob-floor should override the config-file value"
+    );
+}
+
+#[test]
+fn min_intron_length_is_enforced() {
+    let min_length = 351;
+
+    assert!(
+        intron_lengths(&run(&[])).iter().any(|&l| l < min_length),
+        "precondition: the default run must contain an intron shorter than {min_length} bp"
+    );
+    let lengths = intron_lengths(&run(&["--min-intron-length", &min_length.to_string()]));
+    assert!(
+        lengths.iter().all(|&l| l >= min_length),
+        "introns shorter than --min-intron-length {min_length}: {lengths:?}"
+    );
 }

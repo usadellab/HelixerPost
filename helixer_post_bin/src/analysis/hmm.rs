@@ -19,8 +19,9 @@ pub struct HmmConfig {
     /// Per-transition booleans gating which splice-junction types the decoder
     /// will consider in each surrounding context.
     pub splice: SpliceFlags,
-    /// Minimum Intron Lengths, for each supported intron class
-    /// Enforced by preventing
+    /// Minimum intron length in bases, for each supported intron class.
+    /// Enforced in the decoder: the donor state of each class spans
+    /// `length - 1` bases, so shorter introns cannot be decoded (floor: 2).
     pub minimum_intron_lengths: MinimalIntronLengths,
     /// Multiplicative weights for the start / stop / donor / acceptor signals
     /// when they enter the per-base penalty sum.
@@ -56,6 +57,8 @@ impl HmmConfig {
         stop_weight: Option<f64>,
         donor_weight: Option<f64>,
         acceptor_weight: Option<f64>,
+        min_intron_length: Option<usize>,
+        min_intron_length_u12: Option<usize>,
     ) -> Self {
         if let Some(v) = prob_floor {
             self.prob_floor = v;
@@ -74,6 +77,13 @@ impl HmmConfig {
         }
         if let Some(v) = acceptor_weight {
             self.weights.acceptor = v;
+        }
+        if let Some(v) = min_intron_length {
+            self.minimum_intron_lengths.u2_gt_ag = v;
+            self.minimum_intron_lengths.u2_gc_ag = v;
+        }
+        if let Some(v) = min_intron_length_u12 {
+            self.minimum_intron_lengths.u12_at_ac = v;
         }
         self
     }

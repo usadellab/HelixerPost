@@ -512,8 +512,9 @@ impl SequenceRating {
 }
 
 
+/// Per-base rating output; `disabled()` skips all formatting and writing.
 pub struct RatingWriter<W: Write> {
-    writer: BufWriter<W>,
+    writer: Option<BufWriter<W>>,
 }
 
 const CLASS_NAMES: [&str; 4] = ["IG", "UTR", "CDS", "INT"];
@@ -521,7 +522,11 @@ const PHASE_NAMES: [&str; 4] = ["NP", "P0", "P1", "P2"];
 
 impl<W: Write> RatingWriter<W> {
     pub fn new(writer: BufWriter<W>) -> RatingWriter<W> {
-        RatingWriter { writer }
+        RatingWriter { writer: Some(writer) }
+    }
+
+    pub fn disabled() -> RatingWriter<W> {
+        RatingWriter { writer: None }
     }
 
     fn write(&mut self, _species: &Species, seq: &Sequence, rev: bool, pos: usize,
@@ -529,6 +534,9 @@ impl<W: Write> RatingWriter<W> {
                  class_ml: &ClassPrediction, phase_ml: &PhasePrediction,
                  annotation: Annotation) -> std::io::Result<()> {
 //write!(self.writer, "# {}\n", helixer_model_md5sum)?; println!("{:.3}", x)
+        let Some(writer) = self.writer.as_mut() else {
+            return Ok(());
+        };
 
         let rev = if rev {"-"} else {"+"};
 
@@ -559,7 +567,7 @@ impl<W: Write> RatingWriter<W> {
         let phase_ml_vals = phase_ml.get();
         let phase_ml_scores = format!("{:.3},{:.3},{:.3},{:.3}", phase_ml_vals[0], phase_ml_vals[1], phase_ml_vals[2], phase_ml_vals[3]);
 
-        writeln!(self.writer, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        writeln!(writer, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                seq.get_name(), rev, pos,
                class_ref_str, class_ref_scores, class_ml_str, class_ml_scores,
                phase_ref_str, phase_ref_scores, phase_ml_str, phase_ml_scores,

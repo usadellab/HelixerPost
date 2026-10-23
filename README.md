@@ -50,6 +50,12 @@ In order for Helixer to find this binary, it needs to be on the PATH. The easies
 the binary to the bin folder in the virtual environment which you previously created for Helixer 
 (e.g. `path_to_Helixer/env/bin` )
 
+### Compatibility with Helixer
+Version 0.4.0 replaced the positional parameters (`<window_size> <edge_threshold> <peak_threshold>
+<min_coding_length>`) with named options. Helixer versions after 0.3.7 require HelixerPost 0.4.0 or
+newer; Helixer 0.3.7 and older require HelixerPost 0.3.0 (`git checkout v0.3.0` before building).
+`helixer_post_bin --version` prints the installed version.
+
 ## Concept
 HelixerPost uses a sliding window assessment to determine regions of the genome which are likely gene containing.
 This is then followed by a Hidden Markov Model to convert the base class and coding phase predictions within
@@ -76,7 +82,7 @@ Positional arguments:
 
 Common options (run `--help` for the full list):
 
-* `--rating <path>` — precision/recall stats file. Defaults to `<output.gff>.rating`.
+* `--rating <path>` — per-base rating file (reference vs prediction for each base and strand). Only written when given; it takes roughly 230 bytes per bp of genome (about 30 GB for 135 Mbp). The summary precision/recall stats are always printed to stdout.
 * `-j, --threads <N>` — HMM worker threads. Defaults to `std::thread::available_parallelism()`.
 * `-c, --config <path>` — YAML config file. CLI flags below override the file; the
   file overrides built-in defaults. See `example/default_config.yml` for the full schema.
@@ -88,11 +94,14 @@ Pipeline tuning (also configurable via the YAML file):
 * `--edge-threshold <f>` — mean genic score required to enter/leave a candidate window (default `0.1`).
 * `--peak-threshold <f>` — peak genic score required to accept a candidate window (default `0.8`).
 * `--min-coding-length <bp>` — drop genes with total CDS shorter than this (default `60`).
+* `--min-intron-length <bp>` — minimum intron length for U2-type introns, GT-AG and GC-AG (default `50`); U12-type GT-AG introns are decoded as U2 and follow it too.
+* `--min-intron-length-u12 <bp>` — minimum intron length for U12-type AT-AC introns (default `30`). Values below 2 act as 2 for both options. For species with introns shorter than 50 bp, setting both to the same lower value is sufficient. Values below 20 are not recommended: the Helixer models were not trained on introns that short (see the [Helixer options documentation](https://github.com/weberlab-hhu/Helixer/blob/main/docs/helixer_options.md#post-processing-parameters)).
 * `--hmm-prob-floor <f>` — minimum probability used before negative-log conversion (default `1e-9`).
 * `--hmm-phase-retain <f>` — weight given to the predicted phase signal (default `0.20`).
 * `--hmm-start-weight <f>` / `--hmm-stop-weight <f>` — multiplicative weights on the start / stop codon base-match penalties (default `1000`).
 * `--hmm-donor-weight <f>` / `--hmm-acceptor-weight <f>` — multiplicative weights on splice donor / acceptor base-match penalties (default `1.0`).
 
+The minimum intron lengths can also be set per intron class in the config file (`hmm.minimum_intron_lengths`).
 The HMM splice-flag booleans and per-donor fixed penalties are config-file-only
 (they appear in `example/default_config.yml` and `--print-default-config`).
 

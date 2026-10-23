@@ -13,9 +13,11 @@ Single Cargo workspace with one member crate (`helixer_post_bin`).
 ```
 cargo build --release          # release binary at target/release/helixer_post_bin
 cargo build                    # debug
-cargo test                     # no tests are currently defined, but this is the entry point
+cargo test                     # unit tests in src/ plus end-to-end tests in tests/example.rs
 cargo test <name>              # run a single test by substring match
 ```
+
+`tests/example.rs` runs the binary on `example/` and compares runs against each other or checks output properties (e.g. minimum intron length), each with an explicit precondition so a test cannot pass vacuously. There are deliberately no committed expected-output files: the example data is not curated enough to serve as a reference annotation.
 
 System dependency: HDF5 development headers (`hdf5-devel` on Fedora, `libhdf5-dev` on Ubuntu). The crate uses `hdf5-metno` (a fork of the abandoned `hdf5` crate) for compatibility with current native HDF5 versions.
 
@@ -31,12 +33,13 @@ Key flags:
 
 - `-c, --config <path>` — YAML config file (full schema in `example/default_config.yml`).
 - `--print-default-config` — dump built-in defaults to stdout as YAML, then exit. Positional args are not required when this flag is present.
-- `--rating <path>` — defaults to `<gff>.rating`.
+- `--rating <path>` — per-base rating file, only written when given (`RatingWriter::disabled()` otherwise skips all per-base formatting); roughly 230 bytes per bp.
 - `-j, --threads <N>` — defaults to `std::thread::available_parallelism()`.
 - `--window-size`, `--edge-threshold`, `--peak-threshold`, `--min-coding-length` — pass-1/3 overrides.
 - `--hmm-prob-floor`, `--hmm-phase-retain`, `--hmm-{start,stop,donor,acceptor}-weight` — pass-2 HMM tuning overrides.
+- `--min-intron-length` (sets `u2_gt_ag` and `u2_gc_ag`; U12-type GT-AG introns are decoded as U2 and follow it too) and `--min-intron-length-u12` (sets `u12_at_ac`) — pass-2 minimum intron lengths, enforced inside the decoder (floor 2).
 
-Precedence: **CLI flag > `--config` file value > built-in default**. The splice-flag booleans and the four per-donor fixed penalties are file-only (no CLI flags); set them via the YAML config.
+Precedence: **CLI flag > `--config` file value > built-in default**. The splice-flag booleans and the three per-donor fixed penalties are file-only (no CLI flags); set them via the YAML config.
 
 The Helixer Python wrapper used to call this binary with 9 positional args; that contract is broken and the upstream invocation needs to be updated to the flag form. A worked example with input/output files lives in `example/example.md`, and the example folder also contains `default_config.yml` which round-trips byte-identical output via `--config`.
 

@@ -14,6 +14,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(
     name = "helixer_post_bin",
+    version,
     about = "Post-process Helixer base-level predictions into a GFF gene annotation.",
     long_about = "Reads the HDF5 genome and prediction files produced by the Helixer pipeline, \
                   runs sliding-window candidate detection followed by a per-window HMM decode, \
@@ -43,7 +44,8 @@ struct Cli {
     #[arg(long, exclusive = true)]
     print_default_config: bool,
 
-    /// Output rating / stats path. Defaults to <gff>.rating.
+    /// Per-base rating output path (one line per base and strand, roughly 230 bytes
+    /// per bp of genome). Not written unless given.
     #[arg(long)]
     rating: Option<PathBuf>,
 
@@ -91,26 +93,26 @@ struct Cli {
     /// Multiplicative weight on the splice acceptor base-match penalty.
     #[arg(long)]
     hmm_acceptor_weight: Option<f64>,
+
+    /// Minimum intron length in bases for U2-type introns (GT-AG and GC-AG).
+    /// Also applies to U12-type GT-AG introns, which the decoder models as U2.
+    /// Values below 2 act as 2; values below 20 are not recommended, as the
+    /// Helixer models were not trained on introns that short.
+    #[arg(long)]
+    min_intron_length: Option<usize>,
+
+    /// Minimum intron length in bases for AT-AC introns (U12-type ATATCCT donor).
+    /// Set separately because the class is modelled separately, not because
+    /// U12-type introns are shorter.
+    /// Values below 2 act as 2; values below 20 are not recommended.
+    #[arg(long)]
+    min_intron_length_u12: Option<usize>,
 }
 
 fn default_threads() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
-}
-
-fn default_rating_path(gff: &PathBuf) -> PathBuf {
-    let mut p = gff.clone();
-    let new_name = match p.file_name() {
-        Some(name) => {
-            let mut s = name.to_os_string();
-            s.push(".rating");
-            s
-        }
-        None => "helixer.rating".into(),
-    };
-    p.set_file_name(new_name);
-    p
 }
 
 fn main() -> Result<()> {
@@ -144,9 +146,10 @@ fn main() -> Result<()> {
         cli.hmm_stop_weight,
         cli.hmm_donor_weight,
         cli.hmm_acceptor_weight,
+        cli.min_intron_length,
+        cli.min_intron_length_u12,
     );
     let thread_count = cli.threads.unwrap_or_else(default_threads);
-    let rating_path = cli.rating.unwrap_or_else(|| default_rating_path(&gff_path));
 
     let helixer_res = HelixerResults::new(&predictions_path, &genome_path)
         .context("opening Helixer prediction / genome HDF5 inputs")?;
@@ -198,9 +201,14 @@ fn main() -> Result<()> {
         .write_global_header(species_name, model_md5sum)
         .with_context(|| format!("writing GFF header to {}", gff_path.display()))?;
 
-    let rating_file = File::create(&rating_path)
-        .with_context(|| format!("creating rating output {}", rating_path.display()))?;
-    let mut rating_writer = RatingWriter::new(BufWriter::new(rating_file));
+    let mut rating_writer = match &cli.rating {
+        Some(path) => {
+            let rating_file = File::create(path)
+                .with_context(|| format!("creating rating output {}", path.display()))?;
+            RatingWriter::new(BufWriter::new(rating_file))
+        }
+        None => RatingWriter::disabled(),
+    };
 
     let mut total_count = 0;
     let mut total_length = 0;

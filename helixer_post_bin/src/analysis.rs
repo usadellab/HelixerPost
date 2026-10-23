@@ -304,7 +304,7 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
             gff_writer,
         )?;
         let rev_seq_rating = rev_comp_rater
-            .calculate_stats(species, seq, false, rating_writer)
+            .calculate_stats(species, seq, true, rating_writer)
             .with_context(|| format!("writing reverse rating for {}", seq.get_name()))?;
         println!(
             "Rating for Sequence {} - ID {} - Reverse",
