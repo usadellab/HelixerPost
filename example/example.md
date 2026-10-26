@@ -23,7 +23,8 @@ The same result is obtained by explicitly passing the bundled config file
 helixer_post_bin --config default_config.yml genome_data.h5 predictions.h5 output.gff3
 ```
 
-Summary rating stats are printed to stdout. A per-base rating file is only
+Species-level rating stats are printed to stdout; `--verbose` adds per-sequence
+and per-strand stats plus progress and debug lines. A per-base rating file is only
 written when `--rating <path>` is given.
 
 CLI flags override values from `--config` which override the built-in defaults.

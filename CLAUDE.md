@@ -34,6 +34,7 @@ Key flags:
 - `-c, --config <path>` — YAML config file (full schema in `example/default_config.yml`).
 - `--print-default-config` — dump built-in defaults to stdout as YAML, then exit. Positional args are not required when this flag is present.
 - `--rating <path>` — per-base rating file, only written when given (`RatingWriter::disabled()` otherwise skips all per-base formatting); roughly 230 bytes per bp.
+- `-v, --verbose` — enables the per-sequence/per-strand rating dumps, the per-sequence and per-window progress lines and the per-region HMM traces. Without it, stdout holds the HMM/pipeline config, the species total rating and the `Total:` line (genes, bp, windows).
 - `-j, --threads <N>` — defaults to `std::thread::available_parallelism()`.
 - `--window-size`, `--edge-threshold`, `--peak-threshold`, `--min-coding-length` — pass-1/3 overrides.
 - `--hmm-prob-floor`, `--hmm-phase-retain`, `--hmm-{start,stop,donor,acceptor}-weight` — pass-2 HMM tuning overrides.
@@ -72,7 +73,7 @@ The dataflow per sequence/strand is built up as nested iterators:
 3. `Analyzer::process_sequence_1d` (in `analysis.rs`) dispatches each candidate window to a `threadpool::ThreadPool` worker. The analyzer holds an `Arc<HmmConfig>`; each worker gets a clone before `thread_pool.execute(move || ...)`, and the worker calls `PredictionHmm::new(bp_vec, hmm_cfg).solve()`. Results come back via an `mpsc` channel and are re-sorted into emission order before downstream processing.
 4. `hmm::PredictionHmm` runs a Viterbi-style decode using per-base penalties (`ClassPredPenalty`, `PhasePredPenalty`, `PredPenalty`, `BasesPenalty`). These are now built via explicit `::new(pred, prob_floor[, phase_retain])` constructors (formerly `impl From`) so the floor and phase-blending parameters flow from `HmmConfig`. `TransitionContext` carries `cfg: &HmmConfig`; the donor/acceptor methods and `HmmState::get_common_state_entrance_penalty` read weights and fixed penalties off it, and `populate_successor_states_and_transition_penalties` reads splice booleans from `cfg.splice.*` at each `consider_transition` call site. Output is a sequence of `HmmStateRegion`s, which `HmmStateRegion::split_genes` groups into individual genes.
 5. `gff_conv::hmm_solution_to_gff` converts each gene into GFF records honouring the strand and the active `min_coding_length`; records are streamed out via `gff::GffWriter`.
-6. In parallel with GFF emission, `rater::SequenceRater` consumes the `ComparisonExtractor` iterator and tallies a confusion matrix per base class, producing precision/recall/F1 per sequence and per species; these are dumped to stdout and to the rating output file via `rater::RatingWriter`.
+6. In parallel with GFF emission, `rater::SequenceRater` consumes the `ComparisonExtractor` iterator and tallies a confusion matrix per base class, producing precision/recall/F1 per sequence and per species; these are dumped to stdout (per sequence and per strand only with `--verbose`) and to the rating output file via `rater::RatingWriter`.
 
 Things to keep in mind when editing the pipeline:
 
@@ -81,6 +82,7 @@ Things to keep in mind when editing the pipeline:
 - Forward and reverse strands are processed independently with separate ratings; both feed the same `GffWriter`. The `gene_idx` counter is shared so gene IDs stay unique within a sequence.
 - `main.rs` rejects multi-species inputs with a clear `bail!` for GFF output (was an `assert!` pre-Phase A).
 - Errors propagate through `process_sequence` / `process_sequence_1d` as `anyhow::Result`; the previous `panic!("No solution at …")` is now a `bail!`. Note: the workspace still has `panic = "abort"`, so a worker-thread panic (e.g. `MAX_EVALS` exceeded inside `PredictionHmm::solve`) will still abort the whole process — those paths haven't been migrated to `Result`.
+- Verbosity is a process-wide flag in `verbose.rs` (`set_verbose` in `main`, `is_verbose()`), so worker threads and the HMM trace can read it without parameter threading. Debug and progress prints use the `vprintln!` macro; multi-line dumps are wrapped in `if is_verbose()`. Warnings go to stderr via `eprintln!` regardless of verbosity.
 - `analysis::hmm::show_hmm_config(&HmmConfig)` is called once at startup so the active HMM tuning is visible in any run log; `main` also prints the pipeline (window/filter) config on the next line.
 
 ### `gff.rs` — output

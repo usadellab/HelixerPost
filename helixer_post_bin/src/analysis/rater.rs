@@ -3,6 +3,7 @@ use crate::analysis::extractor::ComparisonIterator;
 use crate::analysis::hmm::{HmmAnnotationLabel, HmmStateRegion};
 use crate::results::conv::{ClassPrediction, ClassReference, PhasePrediction, PhaseReference};
 use crate::results::{Sequence, Species};
+use crate::vprintln;
 /*
     Rows are based on 'reference', Columns are based on 'prediction'
 
@@ -210,7 +211,7 @@ impl<'a> SequenceRater<'a> {
             let mut coding_annotation = Annotation::CodingPhase0;
 
             for region in gene_regions {
-                println!("Rating region {} {} {}", region.get_start_pos(), region.get_end_pos(), region.get_annotation_label().to_str());
+                vprintln!("Rating region {} {} {}", region.get_start_pos(), region.get_end_pos(), region.get_annotation_label().to_str());
 
                 if region.get_annotation_label() != HmmAnnotationLabel::Coding {
                     let annotation = match region.get_annotation_label() {

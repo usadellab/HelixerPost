@@ -82,7 +82,8 @@ Positional arguments:
 
 Common options (run `--help` for the full list):
 
-* `--rating <path>` — per-base rating file (reference vs prediction for each base and strand). Only written when given; it takes roughly 230 bytes per bp of genome (about 30 GB for 135 Mbp). The summary precision/recall stats are always printed to stdout.
+* `--rating <path>` — per-base rating file (reference vs prediction for each base and strand). Only written when given; it takes roughly 230 bytes per bp of genome (about 30 GB for 135 Mbp). The species-level precision/recall stats are always printed to stdout.
+* `-v, --verbose` — also print per-sequence and per-strand precision/recall stats, one line per sequence and per candidate window, and the decoded HMM regions (debug output, roughly 20 lines per gene). Without it, stdout holds the active config, the species-level stats and a total line with the gene count.
 * `-j, --threads <N>` — HMM worker threads. Defaults to `std::thread::available_parallelism()`.
 * `-c, --config <path>` — YAML config file. CLI flags below override the file; the
   file overrides built-in defaults. See `example/default_config.yml` for the full schema.

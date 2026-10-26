@@ -7,6 +7,8 @@ use helixer_post_bin::analysis::{Analyzer, FileConfig};
 use helixer_post_bin::gff::GffWriter;
 use helixer_post_bin::results::raw::RawHelixerPredictions;
 use helixer_post_bin::results::HelixerResults;
+use helixer_post_bin::verbose::{is_verbose, set_verbose};
+use helixer_post_bin::vprintln;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
@@ -107,6 +109,12 @@ struct Cli {
     /// Values below 2 act as 2; values below 20 are not recommended.
     #[arg(long)]
     min_intron_length_u12: Option<usize>,
+
+    /// Print detailed progress and debug output: per-sequence and per-strand
+    /// ratings, one line per sequence and candidate window, and the decoded HMM
+    /// regions. Without it, only the config, warnings and the species summary are printed.
+    #[arg(long, short = 'v')]
+    verbose: bool,
 }
 
 fn default_threads() -> usize {
@@ -122,6 +130,7 @@ fn main() -> Result<()> {
         print!("{}", FileConfig::default().to_yaml()?);
         return Ok(());
     }
+    set_verbose(cli.verbose);
 
     // required_unless_present above guarantees these three are Some when we reach this point.
     let genome_path = cli.genome.expect("genome path required");
@@ -213,13 +222,14 @@ fn main() -> Result<()> {
 
     let mut total_count = 0;
     let mut total_length = 0;
+    let mut total_genes = 0;
 
     for species in helixer_res.get_all_species() {
         let mut fwd_species_rating = SequenceRating::new();
         let mut rev_species_rating = SequenceRating::new();
 
         let id = species.get_id();
-        println!(
+        vprintln!(
             "Sequences for Species {} - {}",
             species.get_name(),
             id.inner()
@@ -232,7 +242,7 @@ fn main() -> Result<()> {
                     format!("writing sequence-region header for {}", seq.get_name())
                 })?;
 
-            let (count, length) = analyzer.process_sequence(
+            let (count, length, genes) = analyzer.process_sequence(
                 species,
                 seq,
                 &mut fwd_species_rating,
@@ -243,21 +253,24 @@ fn main() -> Result<()> {
 
             total_count += count;
             total_length += length;
+            total_genes += genes;
         }
 
-        println!(
-            "Forward for Species {} - {}",
-            species.get_name(),
-            id.inner()
-        );
-        fwd_species_rating.dump(analyzer.has_ref());
+        if is_verbose() {
+            println!(
+                "Forward for Species {} - {}",
+                species.get_name(),
+                id.inner()
+            );
+            fwd_species_rating.dump(analyzer.has_ref());
 
-        println!(
-            "Reverse for Species {} - {}",
-            species.get_name(),
-            id.inner()
-        );
-        rev_species_rating.dump(analyzer.has_ref());
+            println!(
+                "Reverse for Species {} - {}",
+                species.get_name(),
+                id.inner()
+            );
+            rev_species_rating.dump(analyzer.has_ref());
+        }
 
         let mut species_rating = SequenceRating::new();
         species_rating.accumulate(&fwd_species_rating);
@@ -267,6 +280,9 @@ fn main() -> Result<()> {
         species_rating.dump(analyzer.has_ref());
     }
 
-    println!("Total: {}bp across {} windows", total_length, total_count);
+    println!(
+        "Total: {} genes, {}bp across {} windows",
+        total_genes, total_length, total_count
+    );
     Ok(())
 }

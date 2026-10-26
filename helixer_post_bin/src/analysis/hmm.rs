@@ -1,4 +1,5 @@
 use crate::results::conv::{Bases, ClassPrediction, PhasePrediction};
+use crate::vprintln;
 use serde::{Deserialize, Serialize};
 use std::cmp::{max, Ordering};
 use std::collections::BinaryHeap;
@@ -1986,7 +1987,7 @@ impl PredictionHmmSolution {
                 let entry_trans_penalty = eval.trans_penalty;
                 let exit_trans_penalty = boundary_trans_penalty;
 
-                println!("Generate a standard HmmStateRegion S: {} E: {} Label: {} Trans: {} {} {} NegLog: {} {}",
+                vprintln!("Generate a standard HmmStateRegion S: {} E: {} Label: {} Trans: {} {} {} NegLog: {} {}",
                          eval.start_position, region_end_pos, eval.state.get_annotation_label().to_str(),
                          entry_trans_penalty, accum_mid_trans_penalty, exit_trans_penalty,
                          accum_neg_log_prob, neg_log_rate);
@@ -2020,7 +2021,7 @@ impl PredictionHmmSolution {
             let entry_trans_penalty = eval.trans_penalty;
             let exit_trans_penalty = boundary_trans_penalty;
 
-            println!("Generate a starting Intergenic HmmStateRegion S: {} E: {} Label: {} Trans: {} {} {} NegLog: {} {}",
+            vprintln!("Generate a starting Intergenic HmmStateRegion S: {} E: {} Label: {} Trans: {} {} {} NegLog: {} {}",
                      0, region_end_pos, eval.state.get_annotation_label().to_str(),
                      entry_trans_penalty, accum_mid_trans_penalty, exit_trans_penalty,
                      accum_neg_log_prob, neg_log_rate);

@@ -12,6 +12,8 @@ use crate::analysis::window::BasePredictionWindowThresholdIterator;
 use crate::gff::GffWriter;
 use crate::results::conv::{ArrayConvInto, Bases, ClassPrediction, PhasePrediction};
 use crate::results::{Sequence, Species};
+use crate::verbose::is_verbose;
+use crate::vprintln;
 use std::io::Write;
 
 pub mod extractor;
@@ -159,7 +161,7 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
             window_length_total += bp_vec.len();
 
             let end_pos = start_pos + bp_vec.len();
-            println!("Queuing a window from {} to {} (length: {})", start_pos, end_pos, bp_vec.len());
+            vprintln!("Queuing a window from {} to {} (length: {})", start_pos, end_pos, bp_vec.len());
 
             let tx = tx.clone();
             let hmm_cfg = self.hmm_cfg.clone();
@@ -173,7 +175,7 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
                 tx.send((window_count, start_pos, end_pos, maybe_solution))
                     .expect("HMM worker lost its result channel");
 
-                println!("Solved a window from {} to {} (length: {})", start_pos, end_pos, len);
+                vprintln!("Solved a window from {} to {} (length: {})", start_pos, end_pos, len);
             });
 
             window_count += 1;
@@ -238,12 +240,13 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
         rev_rating: &mut SequenceRating,
         gff_writer: &mut GffWriter<GW>,
         rating_writer: &mut RatingWriter<RW>,
-    ) -> Result<(usize, usize)> {
+    ) -> Result<(usize, usize, usize)> {
         let id = seq.get_id();
-        println!(
-            "  BP_Extractor for Sequence {} - ID {}",
+        vprintln!(
+            "Processing Sequence {} - ID {} ({}bp)",
             seq.get_name(),
-            id.inner()
+            id.inner(),
+            seq.get_length()
         );
 
         let mut gene_idx = 1;
@@ -273,12 +276,14 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
         let fwd_seq_rating = fwd_comp_rater
             .calculate_stats(species, seq, false, rating_writer)
             .with_context(|| format!("writing forward rating for {}", seq.get_name()))?;
-        println!(
-            "Rating for Sequence {} - ID {} - Forward",
-            seq.get_name(),
-            id.inner()
-        );
-        fwd_seq_rating.dump(self.comp_extractor.has_ref());
+        if is_verbose() {
+            println!(
+                "Rating for Sequence {} - ID {} - Forward",
+                seq.get_name(),
+                id.inner()
+            );
+            fwd_seq_rating.dump(self.comp_extractor.has_ref());
+        }
 
         fwd_rating.accumulate(&fwd_seq_rating);
 
@@ -306,15 +311,22 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
         let rev_seq_rating = rev_comp_rater
             .calculate_stats(species, seq, true, rating_writer)
             .with_context(|| format!("writing reverse rating for {}", seq.get_name()))?;
-        println!(
-            "Rating for Sequence {} - ID {} - Reverse",
-            seq.get_name(),
-            id.inner()
-        );
-        rev_seq_rating.dump(self.comp_extractor.has_ref());
+        if is_verbose() {
+            println!(
+                "Rating for Sequence {} - ID {} - Reverse",
+                seq.get_name(),
+                id.inner()
+            );
+            rev_seq_rating.dump(self.comp_extractor.has_ref());
+        }
 
         rev_rating.accumulate(&rev_seq_rating);
 
-        Ok((fwd_windows + rev_windows, fwd_window_len + rev_window_len))
+        // gene_idx starts at 1 and is incremented once per written gene
+        Ok((
+            fwd_windows + rev_windows,
+            fwd_window_len + rev_window_len,
+            gene_idx - 1,
+        ))
     }
 }
