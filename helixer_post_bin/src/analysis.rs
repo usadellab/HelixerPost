@@ -257,7 +257,7 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
             window_length_total += bp_vec.len();
 
             let end_pos = start_pos + bp_vec.len();
-            println!("Queuing a window from {} to {} (length: {})", start_pos, end_pos, bp_vec.len());
+            vprintln!("Queuing a window from {} to {} (length: {})", start_pos, end_pos, bp_vec.len());
 
             let tx = tx.clone();
             let hmm_cfg = self.hmm_cfg.clone();
@@ -279,7 +279,7 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
                 tx.send((window_count, start_pos, end_pos, maybe_genes))
                     .expect("HMM worker lost its result channel");
 
-                println!("Solved a window from {} to {} (length: {})", start_pos, end_pos, len);
+                vprintln!("Solved a window from {} to {} (length: {})", start_pos, end_pos, len);
             });
 
             window_count += 1;
