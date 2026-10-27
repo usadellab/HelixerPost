@@ -112,7 +112,8 @@ struct Cli {
 
     /// Print detailed progress and debug output: per-sequence and per-strand
     /// ratings, one line per sequence and candidate window, and the decoded HMM
-    /// regions. Without it, only the config, warnings and the species summary are printed.
+    /// regions. Without it, stdout holds the active config, the species-level stats and
+    /// a total line with the gene count, and warnings go to stderr.
     #[arg(long, short = 'v')]
     verbose: bool,
 }

@@ -5,9 +5,9 @@ The following was created from the first 21384 base pairs
 of NC\_023163.2 in the Oryza\_brachyantha genome, version
 GCF\_000231095.2\_ObraRS2 from refseq.
 
-The genome was preprocessed into numeric form (genome\_data.h5) with `fasta2h5py`,
-and base-wise genic predictions (predictions.h5) were created with `HybridModel.h5`
-both from the Helixer project (https://github.com/weberlab-hhu/Helixer).
+The genome was preprocessed into numeric form (genome\_data.h5) with `fasta2h5.py`,
+and base-wise genic predictions (predictions.h5) were created with `HybridModel.py`
+both from the Helixer project (https://github.com/usadellab/Helixer).
 
 ## usage
 From this directory:
@@ -34,20 +34,22 @@ Run `helixer_post_bin --help` for the full flag list, and
 ## expected output
 
 Using the provided data, the above should create the file 'output.gff3',
-and the contents there of are expected to be as follows (as of commit b674af9):
+and the contents there of are expected to be as follows (as of version 0.4.0; the example predictions.h5 predates the
+`helixer_version` attribute of Helixer 0.3.8, hence `# Helixer version unknown`):
 
 ```
-##gff-version 3.2.1
+##gff-version 3.1.26
 ##species Oryza_brachyantha
 # f4f3f7bf629d02431241bfef18cb8ade  /home/ali/.local/share/Helixer/models/land_plant/land_plant_v0.3_a_0100.h5
+# Helixer version unknown
+# HelixerPost version 0.4.0
 ##sequence-region NC_023163.2:1-21384 1 21384
 NC_023163.2:1-21384	Helixer	gene	17026	18898	.	+	.	ID=Oryza_brachyantha_NC_023163.2:1-21384_000001
 NC_023163.2:1-21384	Helixer	mRNA	17026	18898	.	+	.	ID=Oryza_brachyantha_NC_023163.2:1-21384_000001.1;Parent=Oryza_brachyantha_NC_023163.2:1-21384_000001
 NC_023163.2:1-21384	Helixer	exon	17026	17356	.	+	.	ID=Oryza_brachyantha_NC_023163.2:1-21384_000001.1.exon.1;Parent=Oryza_brachyantha_NC_023163.2:1-21384_000001.1
-NC_023163.2:1-21384	Helixer	five_prime_UTR	17026	17115	.	+	.	ID=Oryza_brachyantha_NC_023163.2:1-21384_000001.1.five_prime_UTR.1;Parent=Oryza_brachyantha_NC_023163.2:1-21384_000001.1
-NC_023163.2:1-21384	Helixer	CDS	17116	17356	.	+	0	ID=Oryza_brachyantha_NC_023163.2:1-21384_000001.1.CDS.1;Parent=Oryza_brachyantha_NC_023163.2:1-21384_000001.1
+NC_023163.2:1-21384	Helixer	five_prime_UTR	17026	17115	.	+	.	ID=Oryza_brachyantha_NC_023163.2:1-21384_000001.1.five_prime_UTR;Parent=Oryza_brachyantha_NC_023163.2:1-21384_000001.1
+NC_023163.2:1-21384	Helixer	CDS	17116	17356	.	+	0	ID=Oryza_brachyantha_NC_023163.2:1-21384_000001.1.CDS;Parent=Oryza_brachyantha_NC_023163.2:1-21384_000001.1
 NC_023163.2:1-21384	Helixer	exon	17707	18898	.	+	.	ID=Oryza_brachyantha_NC_023163.2:1-21384_000001.1.exon.2;Parent=Oryza_brachyantha_NC_023163.2:1-21384_000001.1
-NC_023163.2:1-21384	Helixer	CDS	17707	18305	.	+	2	ID=Oryza_brachyantha_NC_023163.2:1-21384_000001.1.CDS.2;Parent=Oryza_brachyantha_NC_023163.2:1-21384_000001.1
-NC_023163.2:1-21384	Helixer	three_prime_UTR	18306	18898	.	+	.	ID=Oryza_brachyantha_NC_023163.2:1-21384_000001.1.three_prime_UTR.1;Parent=Oryza_brachyantha_NC_023163.2:1-21384_000001.1
+NC_023163.2:1-21384	Helixer	CDS	17707	18305	.	+	2	ID=Oryza_brachyantha_NC_023163.2:1-21384_000001.1.CDS;Parent=Oryza_brachyantha_NC_023163.2:1-21384_000001.1
+NC_023163.2:1-21384	Helixer	three_prime_UTR	18306	18898	.	+	.	ID=Oryza_brachyantha_NC_023163.2:1-21384_000001.1.three_prime_UTR;Parent=Oryza_brachyantha_NC_023163.2:1-21384_000001.1
 ```
-

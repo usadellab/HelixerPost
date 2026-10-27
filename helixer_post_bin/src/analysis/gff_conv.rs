@@ -150,10 +150,8 @@ fn convert_regions_to_gff(
     position: usize,
     gene_name: &str,
 ) -> Vec<GffRecord> {
-    let mut utr5_idx = 0;
-    let mut cds_idx = 0;
-    let mut utr3_idx = 0;
-
+    // Unlike the numbered Phytozome IDs above, all lines of one CDS, 5' UTR or 3' UTR share one ID,
+    // as each is a single discontinuous feature in the GFF3 specification; exons stay numbered.
     let mut coding_offset = 0;
 
     let mut region_vec = Vec::new();
@@ -161,36 +159,21 @@ fn convert_regions_to_gff(
     for region in regions.iter() {
         let maybe_feature_and_attributes = match region.get_annotation_label() {
             HmmAnnotationLabel::Intergenic => None, //panic!("Intergenic should be removed before now"),
-            HmmAnnotationLabel::UTR5 => {
-                utr5_idx += 1;
-                Some((
-                    GffFeature::FivePrimeUTR,
-                    format!(
-                        "ID={}.1.five_prime_UTR.{};Parent={}.1",
-                        gene_name, utr5_idx, gene_name
-                    ),
-                ))
-            }
+            HmmAnnotationLabel::UTR5 => Some((
+                GffFeature::FivePrimeUTR,
+                format!("ID={}.1.five_prime_UTR;Parent={}.1", gene_name, gene_name),
+            )),
             HmmAnnotationLabel::Start => panic!("Start should be Coding"),
-            HmmAnnotationLabel::Coding => {
-                cds_idx += 1;
-                Some((
-                    GffFeature::CDS,
-                    format!("ID={}.1.CDS.{};Parent={}.1", gene_name, cds_idx, gene_name),
-                ))
-            }
+            HmmAnnotationLabel::Coding => Some((
+                GffFeature::CDS,
+                format!("ID={}.1.CDS;Parent={}.1", gene_name, gene_name),
+            )),
             HmmAnnotationLabel::Intron => None,
             HmmAnnotationLabel::Stop => panic!("Stop should be Coding"),
-            HmmAnnotationLabel::UTR3 => {
-                utr3_idx += 1;
-                Some((
-                    GffFeature::ThreePrimeUTR,
-                    format!(
-                        "ID={}.1.three_prime_UTR.{};Parent={}.1",
-                        gene_name, utr3_idx, gene_name
-                    ),
-                ))
-            }
+            HmmAnnotationLabel::UTR3 => Some((
+                GffFeature::ThreePrimeUTR,
+                format!("ID={}.1.three_prime_UTR;Parent={}.1", gene_name, gene_name),
+            )),
         };
 
         if let Some((feature, attributes)) = maybe_feature_and_attributes {

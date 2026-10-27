@@ -210,7 +210,8 @@ impl<W: Write> GffWriter<W> {
         helixer_model_md5sum: Option<String>,
         helixer_version: Option<String>,
     ) -> std::io::Result<()> {
-        const GFF_VERSION: &'static str = "3.2.1";
+        // GFF3 specification version 1.26 (https://github.com/The-Sequence-Ontology/Specifications/blob/master/gff3.md)
+        const GFF_VERSION: &'static str = "3.1.26";
         write!(self.writer, "##gff-version {}\n", GFF_VERSION)?;
         if let Some(species) = species {
             write!(self.writer, "##species {}\n", species)?;

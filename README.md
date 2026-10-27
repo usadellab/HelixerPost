@@ -83,8 +83,8 @@ Positional arguments:
 Common options (run `--help` for the full list):
 
 * `--rating <path>` — per-base rating file (reference vs prediction for each base and strand). Only written when given; it takes roughly 230 bytes per bp of genome (about 30 GB for 135 Mbp). The species-level precision/recall stats are always printed to stdout.
-* `-v, --verbose` — also print per-sequence and per-strand precision/recall stats, one line per sequence and per candidate window, and the decoded HMM regions (debug output, roughly 20 lines per gene). Without it, stdout holds the active config, the species-level stats and a total line with the gene count.
-* `-j, --threads <N>` — HMM worker threads. Defaults to `std::thread::available_parallelism()`.
+* `-v, --verbose` — also print per-sequence and per-strand precision/recall stats, one line per sequence and per candidate window, and the decoded HMM regions (debug output, roughly 20 lines per gene). Without it, stdout holds the active config, the species-level stats and a total line with the gene count, and warnings go to stderr.
+* `-j, --threads <N>` — HMM worker threads. Defaults to `std::thread::available_parallelism()` (all available ones).
 * `-c, --config <path>` — YAML config file. CLI flags below override the file; the
   file overrides built-in defaults. See `example/default_config.yml` for the full schema.
 * `--print-default-config` — write the built-in defaults to stdout as YAML and exit.
@@ -96,7 +96,7 @@ Pipeline tuning (also configurable via the YAML file):
 * `--peak-threshold <f>` — peak genic score required to accept a candidate window (default `0.8`).
 * `--min-coding-length <bp>` — drop genes with total CDS shorter than this (default `60`).
 * `--min-intron-length <bp>` — minimum intron length for U2-type introns, GT-AG and GC-AG (default `50`); U12-type GT-AG introns are decoded as U2 and follow it too.
-* `--min-intron-length-u12 <bp>` — minimum intron length for U12-type AT-AC introns (default `30`). Values below 2 act as 2 for both options. For species with introns shorter than 50 bp, setting both to the same lower value is sufficient. Values below 20 are not recommended: the Helixer models were not trained on introns that short (see the [Helixer options documentation](https://github.com/weberlab-hhu/Helixer/blob/main/docs/helixer_options.md#post-processing-parameters)).
+* `--min-intron-length-u12 <bp>` — minimum intron length for U12-type AT-AC introns (default `30`). Values below 2 act as 2 for both options. For species with introns shorter than 50 bp, setting both to the same lower value is sufficient. Values below 20 are not recommended: the Helixer models were not trained on introns that short (see the [Helixer options documentation](https://github.com/usadellab/Helixer/blob/main/docs/helixer_options.md#post-processing-parameters)).
 * `--hmm-prob-floor <f>` — minimum probability used before negative-log conversion (default `1e-9`).
 * `--hmm-phase-retain <f>` — weight given to the predicted phase signal (default `0.20`).
 * `--hmm-start-weight <f>` / `--hmm-stop-weight <f>` — multiplicative weights on the start / stop codon base-match penalties (default `1000`).
