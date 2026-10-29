@@ -15,7 +15,6 @@ Cargo.lock
 /prof/
 /out/
 /out
-
+/example/
 scratch.txt
-
 *.swp

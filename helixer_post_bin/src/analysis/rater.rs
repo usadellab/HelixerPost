@@ -1,7 +1,9 @@
+use std::io::{BufWriter, Write};
 use crate::analysis::extractor::ComparisonIterator;
 use crate::analysis::hmm::{HmmAnnotationLabel, HmmStateRegion};
 use crate::results::conv::{ClassPrediction, ClassReference, PhasePrediction, PhaseReference};
-
+use crate::results::{Sequence, Species};
+use crate::vprintln;
 /*
     Rows are based on 'reference', Columns are based on 'prediction'
 
@@ -191,7 +193,7 @@ impl<'a> SequenceRater<'a> {
         }
     }
 
-    pub fn rate_regions(
+    pub fn rate_window_regions(
         &mut self,
         start_offset: usize,
         gene_regions: &[HmmStateRegion],
@@ -209,6 +211,8 @@ impl<'a> SequenceRater<'a> {
             let mut coding_annotation = Annotation::CodingPhase0;
 
             for region in gene_regions {
+                vprintln!("Rating region {} {} {}", region.get_start_pos(), region.get_end_pos(), region.get_annotation_label().to_str());
+
                 if region.get_annotation_label() != HmmAnnotationLabel::Coding {
                     let annotation = match region.get_annotation_label() {
                         HmmAnnotationLabel::Intergenic => Annotation::Intergenic,
@@ -247,11 +251,11 @@ impl<'a> SequenceRater<'a> {
         }
     }
 
-    pub fn calculate_stats(self) -> SequenceRating {
+    pub fn calculate_stats<RW: Write>(self, species: &Species, seq: &Sequence, rev: bool, rating_writer: &mut RatingWriter<RW>) -> std::io::Result<SequenceRating> {
         let mut rating = SequenceRating::new();
-        rating.rate(self.comp_iterator, self.annotation);
+        rating.rate(self.comp_iterator, self.annotation, species, seq, rev, rating_writer)?;
 
-        rating
+        Ok(rating)
     }
 }
 
@@ -307,9 +311,12 @@ impl SequenceRating {
         self.filtered_count += other.filtered_count;
     }
 
-    fn rate(&mut self, comp_iterator: ComparisonIterator, annotation: Vec<Annotation>) {
-        for ((class_ref, phase_ref, class_ml, phase_ml), annotation) in
-            comp_iterator.zip(annotation.into_iter())
+    fn rate<RW: Write>(&mut self, comp_iterator: ComparisonIterator, annotation: Vec<Annotation>,
+                       species: &Species, seq: &Sequence, rev: bool, rating_writer: &mut RatingWriter<RW>) -> std::io::Result<()> {
+        let has_ref = comp_iterator.has_ref();
+
+        for (idx, ((class_ref, phase_ref, class_ml, phase_ml), annotation)) in
+            comp_iterator.zip(annotation.into_iter()).enumerate()
         {
             let ref_class_idx = class_ref.get_class_idx();
             let ref_phase_idx = phase_ref.get_phase_idx();
@@ -342,7 +349,16 @@ impl SequenceRating {
                     _ => (),
                 }
             }
+
+            if has_ref {
+                rating_writer.write(species, seq, rev, idx, Some(&class_ref), Some(&phase_ref), &class_ml, &phase_ml, annotation)?;
+            }
+            else {
+                rating_writer.write(species, seq, rev, idx, None, None, &class_ml, &phase_ml, annotation)?;
+            }
         }
+
+        Ok(())
     }
 
     const CLASS_NAMES: [&'static str; 4] = ["Intergenic", "UTR", "Coding", "Intron"];
@@ -496,9 +512,76 @@ impl SequenceRating {
     }
 }
 
+
+/// Per-base rating output; `disabled()` skips all formatting and writing.
+pub struct RatingWriter<W: Write> {
+    writer: Option<BufWriter<W>>,
+}
+
+const CLASS_NAMES: [&str; 4] = ["IG", "UTR", "CDS", "INT"];
+const PHASE_NAMES: [&str; 4] = ["NP", "P0", "P1", "P2"];
+
+impl<W: Write> RatingWriter<W> {
+    pub fn new(writer: BufWriter<W>) -> RatingWriter<W> {
+        RatingWriter { writer: Some(writer) }
+    }
+
+    pub fn disabled() -> RatingWriter<W> {
+        RatingWriter { writer: None }
+    }
+
+    fn write(&mut self, _species: &Species, seq: &Sequence, rev: bool, pos: usize,
+                 class_ref: Option<&ClassReference>, phase_ref: Option<&PhaseReference>,
+                 class_ml: &ClassPrediction, phase_ml: &PhasePrediction,
+                 annotation: Annotation) -> std::io::Result<()> {
+//write!(self.writer, "# {}\n", helixer_model_md5sum)?; println!("{:.3}", x)
+        let Some(writer) = self.writer.as_mut() else {
+            return Ok(());
+        };
+
+        let rev = if rev {"-"} else {"+"};
+
+        let (class_ref_str, class_ref_scores) = if let Some(class_ref) = class_ref {
+            let class_ref_str = CLASS_NAMES[class_ref.get_class_idx()];
+            let class_ref_vals = class_ref.get();
+            let class_ref_scores = format!("{},{},{},{}", class_ref_vals[0], class_ref_vals[1], class_ref_vals[2], class_ref_vals[3]);
+            (class_ref_str, class_ref_scores)
+        }
+        else {
+            ("-", String::from("-,-,-,-"))
+        };
+
+        let class_ml_str = CLASS_NAMES[class_ml.get_class_idx()];
+        let class_ml_vals = class_ml.get();
+        let class_ml_scores = format!("{:.3},{:.3},{:.3},{:.3}", class_ml_vals[0], class_ml_vals[1], class_ml_vals[2], class_ml_vals[3]);
+
+        let (phase_ref_str, phase_ref_scores) = if let Some(phase_ref) = phase_ref {
+            let phase_ref_str = PHASE_NAMES[phase_ref.get_phase_idx()];
+            let phase_ref_vals = phase_ref.get();
+            let phase_ref_scores = format!("{},{},{},{}", phase_ref_vals[0], phase_ref_vals[1], phase_ref_vals[2], phase_ref_vals[3]);
+            (phase_ref_str, phase_ref_scores)
+        } else {
+            ("-", String::from("-,-,-,-"))
+        };
+
+        let phase_ml_str = PHASE_NAMES[phase_ml.get_phase_idx()];
+        let phase_ml_vals = phase_ml.get();
+        let phase_ml_scores = format!("{:.3},{:.3},{:.3},{:.3}", phase_ml_vals[0], phase_ml_vals[1], phase_ml_vals[2], phase_ml_vals[3]);
+
+        writeln!(writer, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+               seq.get_name(), rev, pos,
+               class_ref_str, class_ref_scores, class_ml_str, class_ml_scores,
+               phase_ref_str, phase_ref_scores, phase_ml_str, phase_ml_scores,
+               annotation.to_str())?;
+
+        Ok(())
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
-    use crate::analysis::rater::ConfusionMatrix;
+    use crate::analysis::rater::{calc_precision_recall_f1, ConfusionMatrix};
 
     #[test]
     fn test_confusion_empty_matrix() {
@@ -555,5 +638,72 @@ mod tests {
             assert_eq!(matrix.get_fp(i), 0);
             assert_eq!(matrix.get_fn(i), 2);
         }
+    }
+
+    #[test]
+    fn test_confusion_accumulate() {
+        let mut a = ConfusionMatrix::<3>::new();
+        a.increment(0, 0);
+        a.increment(1, 2);
+
+        let mut b = ConfusionMatrix::<3>::new();
+        b.increment(0, 0);
+        b.increment(2, 2);
+
+        a.accumulate(&b);
+
+        assert_eq!(a.get_tp(0), 2);
+        assert_eq!(a.get_tp(2), 1);
+        assert_eq!(a.get_fn(1), 1); // ref=1 pred=2 from `a`'s own pre-accumulate state
+        assert_eq!(a.get_fp(2), 1); // same row above
+    }
+
+    /// All-zero inputs (no positives in reference or prediction) must yield
+    /// NaN rather than panic or 0. `SequenceRater::calculate_stats` produces
+    /// these every time a class doesn't appear in a window.
+    #[test]
+    fn precision_recall_f1_division_by_zero_yields_nan() {
+        let (p, r, f1) = calc_precision_recall_f1(0, 0, 0);
+        assert!(p.is_nan());
+        assert!(r.is_nan());
+        assert!(f1.is_nan());
+    }
+
+    #[test]
+    fn precision_recall_f1_perfect_classifier() {
+        let (p, r, f1) = calc_precision_recall_f1(100, 0, 0);
+        assert_eq!(p, 1.0);
+        assert_eq!(r, 1.0);
+        assert_eq!(f1, 1.0);
+    }
+
+    #[test]
+    fn precision_recall_f1_known_values() {
+        let (p, r, f1) = calc_precision_recall_f1(50, 10, 20);
+        // P = 50 / (50+10) = 5/6, R = 50 / (50+20) = 5/7,
+        // F1 = (2 * 50) / (2*50 + 10 + 20) = 100/130.
+        assert!((p - 50.0 / 60.0).abs() < 1e-12);
+        assert!((r - 50.0 / 70.0).abs() < 1e-12);
+        assert!((f1 - 100.0 / 130.0).abs() < 1e-12);
+    }
+
+    /// Cross-check the matrix's own get_precision_recall_f1 against the bare
+    /// helper, on a small hand-built confusion. Catches row/column swaps.
+    #[test]
+    fn confusion_matrix_precision_recall_f1_matches_helper() {
+        let mut m = ConfusionMatrix::<3>::new();
+        // class 0: 4 TP, plus 1 FP (ref=1 pred=0), plus 2 FN (ref=0 pred=2 twice)
+        for _ in 0..4 {
+            m.increment(0, 0);
+        }
+        m.increment(1, 0);
+        m.increment(0, 2);
+        m.increment(0, 2);
+
+        let (p, r, f1) = m.get_precision_recall_f1(0);
+        let (ep, er, ef1) = calc_precision_recall_f1(4, 1, 2);
+        assert!((p - ep).abs() < 1e-12);
+        assert!((r - er).abs() < 1e-12);
+        assert!((f1 - ef1).abs() < 1e-12);
     }
 }

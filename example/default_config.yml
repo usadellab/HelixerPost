@@ -1,0 +1,38 @@
+# Default HelixerPost configuration.
+# Reproduces the binary's built-in defaults exactly; passing this with
+# `--config` produces byte-identical output to running with no flags.
+# Use as a starting template: `helixer_post_bin --print-default-config > my.yml`
+# then edit only the knobs you want to change. CLI flags override these values.
+
+window:
+  window_size: 100
+  edge_threshold: 0.1
+  peak_threshold: 0.8
+hmm:
+  prob_floor: 1e-9
+  phase_retain: 0.2
+  splice:
+    utr5: true
+    utr5_start: true
+    start: true
+    start_coding: true
+    coding: true
+    coding_stop: true
+    stop: true
+    stop_utr3: true
+    utr3: true
+  minimum_intron_lengths:
+    u2_gt_ag: 50
+    u2_gc_ag: 50
+    u12_at_ac: 30
+  weights:
+    start: 1000.0
+    stop: 1000.0
+    donor: 1.0
+    acceptor: 1.0
+  donor_fixed_penalty:
+    u2_gt_ag: 0.0
+    u2_gc_ag: 0.0
+    u12_at_ac: 0.0
+filter:
+  min_coding_length: 60

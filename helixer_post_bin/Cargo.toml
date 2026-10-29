@@ -1,11 +1,19 @@
 [package]
 name = "helixer_post_bin"
-version = "0.1.0"
+version = "0.4.0"
 authors = ["Tony Bolger <bolger.tony@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 #hdf5 = "0.8.1"
 hdf5-metno = "0.9.2"
 ndarray = "0.16.1"
+threadpool = "1.0"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
+[dev-dependencies]
+tempfile = "3"

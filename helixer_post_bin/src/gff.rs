@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter};
 use std::io::{BufWriter, Write};
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum GffFeature {
     Gene,
     MRNA,
@@ -30,7 +30,7 @@ impl Display for GffFeature {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum GffStrand {
     Forward,
     Reverse,
@@ -60,7 +60,7 @@ impl GffStrand {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum GffPhase {
     Zero = 0,
     One = 1,
@@ -194,19 +194,24 @@ impl<W: Write> GffWriter<W> {
     }
 
     /// Writes header for the top of the GFF3 file
-    /// and optionally includes species name and Helixer model info
+    /// and optionally includes species name and Helixer model info,
+    /// followed by the Helixer and HelixerPost versions
     ///
     /// # Arguments
     ///
     /// * `species` - An Option containing the species name
     /// * `helixer_model_md5sum` - An Option containing the md5checksum
     /// and file path information from Helixer (as found in h5.attrs\["model_md5sum"\] in the predictions output.)
+    /// * `helixer_version` - An Option containing the Helixer version that wrote the predictions
+    /// (h5.attrs\["helixer_version"\]); written as "unknown" when absent
     pub fn write_global_header(
         &mut self,
         species: Option<&str>,
         helixer_model_md5sum: Option<String>,
+        helixer_version: Option<String>,
     ) -> std::io::Result<()> {
-        const GFF_VERSION: &'static str = "3.2.1";
+        // GFF3 specification version 1.26 (https://github.com/The-Sequence-Ontology/Specifications/blob/master/gff3.md)
+        const GFF_VERSION: &'static str = "3.1.26";
         write!(self.writer, "##gff-version {}\n", GFF_VERSION)?;
         if let Some(species) = species {
             write!(self.writer, "##species {}\n", species)?;
@@ -214,6 +219,12 @@ impl<W: Write> GffWriter<W> {
         if let Some(helixer_model_md5sum) = helixer_model_md5sum {
             write!(self.writer, "# {}\n", helixer_model_md5sum)?;
         }
+        write!(
+            self.writer,
+            "# Helixer version {}\n",
+            helixer_version.as_deref().unwrap_or("unknown")
+        )?;
+        write!(self.writer, "# HelixerPost version {}\n", env!("CARGO_PKG_VERSION"))?;
         Ok(())
     }
 
@@ -258,5 +269,73 @@ impl<W: Write> GffWriter<W> {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(start: u64, end: u64, strand: GffStrand) -> GffRecord {
+        GffRecord::new(
+            "seq".to_owned(),
+            "src".to_owned(),
+            GffFeature::Exon,
+            start,
+            end,
+            None,
+            Some(strand),
+            None,
+            String::new(),
+        )
+    }
+
+    /// The `From<u64> for GffPhase` mapping counts backwards because the GFF
+    /// "phase" column is bases-left-to-read, not bases-consumed. This test
+    /// pins that semantics: any future "simplification" that swaps One/Two
+    /// will fail loudly.
+    #[test]
+    fn gff_phase_counts_down_because_biology() {
+        assert_eq!(GffPhase::from(0_u64), GffPhase::Zero);
+        assert_eq!(GffPhase::from(1_u64), GffPhase::Two);
+        assert_eq!(GffPhase::from(2_u64), GffPhase::One);
+        assert_eq!(GffPhase::from(3_u64), GffPhase::Zero);
+        assert_eq!(GffPhase::from(7_u64), GffPhase::Two);
+    }
+
+    /// swap_strand is invoked once per gene on the reverse strand. A wrong
+    /// formula would silently shift every rev-strand annotation.
+    #[test]
+    fn swap_strand_known_position() {
+        // Sequence length 1000, feature at 100..=200 on the forward strand.
+        // Reverse-complement coordinates: start = 1+1000-200 = 801,
+        // end = 1+1000-100 = 901.
+        let mut r = rec(100, 200, GffStrand::Forward);
+        r.swap_strand(1000);
+        assert_eq!(r.get_start(), 801);
+        assert_eq!(r.get_end(), 901);
+        assert_eq!(r.get_strand(), Some(GffStrand::Reverse));
+    }
+
+    /// A double swap_strand must return the original coordinates and strand.
+    #[test]
+    fn swap_strand_is_an_involution() {
+        let mut r = rec(120, 480, GffStrand::Forward);
+        r.swap_strand(2000);
+        r.swap_strand(2000);
+        assert_eq!(r.get_start(), 120);
+        assert_eq!(r.get_end(), 480);
+        assert_eq!(r.get_strand(), Some(GffStrand::Forward));
+    }
+
+    /// A feature spanning the entire sequence must map to itself under
+    /// reverse-complement.
+    #[test]
+    fn swap_strand_at_full_sequence_boundary() {
+        let mut r = rec(1, 100, GffStrand::Forward);
+        r.swap_strand(100);
+        assert_eq!(r.get_start(), 1);
+        assert_eq!(r.get_end(), 100);
+        assert_eq!(r.get_strand(), Some(GffStrand::Reverse));
     }
 }

@@ -1,6 +1,210 @@
 use crate::results::conv::{Bases, ClassPrediction, PhasePrediction};
-use std::cmp::Ordering;
+use crate::{log_info, vprintln};
+use serde::{Deserialize, Serialize};
+use std::cmp::{max, Ordering};
 use std::collections::BinaryHeap;
+
+
+/// User-tunable HMM parameters. Built with `HmmConfig::default()` and
+/// optionally overridden by a YAML config file and/or CLI flags.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HmmConfig {
+    /// Lower bound applied to raw class/phase/base probabilities before taking
+    /// the negative log, to keep penalties finite when the model emits ~0.
+    pub prob_floor: f64,
+    /// Weight given to the predicted phase signal when blended with the
+    /// uniform coding-phase dilution target. 1.0 = trust phase fully, 0.0 =
+    /// ignore phase predictions entirely.
+    pub phase_retain: f64,
+    /// Per-transition booleans gating which splice-junction types the decoder
+    /// will consider in each surrounding context.
+    pub splice: SpliceFlags,
+    /// Minimum intron length in bases, for each supported intron class.
+    /// Enforced in the decoder: the donor state of each class spans
+    /// `length - 1` bases, so shorter introns cannot be decoded (floor: 2).
+    pub minimum_intron_lengths: MinimalIntronLengths,
+    /// Multiplicative weights for the start / stop / donor / acceptor signals
+    /// when they enter the per-base penalty sum.
+    pub weights: HmmWeights,
+    /// Constant penalty added when accepting each donor variant, independent
+    /// of the local base signal. Use to bias against rare splice types.
+    pub donor_fixed_penalty: DonorFixedPenalties,
+}
+
+impl Default for HmmConfig {
+    fn default() -> Self {
+        Self {
+            prob_floor: 0.000_000_001,
+            phase_retain: 0.20,
+            splice: SpliceFlags::default(),
+            minimum_intron_lengths: MinimalIntronLengths::default(),
+            weights: HmmWeights::default(),
+            donor_fixed_penalty: DonorFixedPenalties::default(),
+        }
+    }
+}
+
+impl HmmConfig {
+    pub fn phase_dilute(&self) -> f64 {
+        1.0 - self.phase_retain
+    }
+
+    pub fn with_overrides(
+        mut self,
+        prob_floor: Option<f64>,
+        phase_retain: Option<f64>,
+        start_weight: Option<f64>,
+        stop_weight: Option<f64>,
+        donor_weight: Option<f64>,
+        acceptor_weight: Option<f64>,
+        min_intron_length: Option<usize>,
+        min_intron_length_u12: Option<usize>,
+    ) -> Self {
+        if let Some(v) = prob_floor {
+            self.prob_floor = v;
+        }
+        if let Some(v) = phase_retain {
+            self.phase_retain = v;
+        }
+        if let Some(v) = start_weight {
+            self.weights.start = v;
+        }
+        if let Some(v) = stop_weight {
+            self.weights.stop = v;
+        }
+        if let Some(v) = donor_weight {
+            self.weights.donor = v;
+        }
+        if let Some(v) = acceptor_weight {
+            self.weights.acceptor = v;
+        }
+        if let Some(v) = min_intron_length {
+            self.minimum_intron_lengths.u2_gt_ag = v;
+            self.minimum_intron_lengths.u2_gc_ag = v;
+        }
+        if let Some(v) = min_intron_length_u12 {
+            self.minimum_intron_lengths.u12_at_ac = v;
+        }
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SpliceFlags {
+    pub utr5: bool,
+    pub utr5_start: bool,
+    pub start: bool,
+    pub start_coding: bool,
+    pub coding: bool,
+    pub coding_stop: bool,
+    pub stop: bool,
+    pub stop_utr3: bool,
+    pub utr3: bool,
+}
+
+impl Default for SpliceFlags {
+    fn default() -> Self {
+        Self {
+            utr5: true,
+            utr5_start: true,
+            start: true,
+            start_coding: true,
+            coding: true,
+            coding_stop: true,
+            stop: true,
+            stop_utr3: true,
+            utr3: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MinimalIntronLengths {
+    pub u2_gt_ag: usize,
+    pub u2_gc_ag: usize,
+    //    pub u12_gt_ag: usize, // Not currently considered a unique intron class
+    pub u12_at_ac: usize,
+}
+
+impl Default for MinimalIntronLengths {
+    fn default() -> Self {
+        Self {
+            u2_gt_ag: 50,
+            u2_gc_ag: 50,
+            //            u12_gt_ag: 30 // Not currently considered a unique intron class
+            u12_at_ac: 30,
+        }
+    }
+}
+
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HmmWeights {
+    pub start: f64,
+    pub stop: f64,
+    pub donor: f64,
+    pub acceptor: f64,
+}
+
+impl Default for HmmWeights {
+    fn default() -> Self {
+        Self {
+            start: 1_000.0,
+            stop: 1_000.0,
+            donor: 1.0,
+            acceptor: 1.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DonorFixedPenalties {
+    pub u2_gt_ag: f64,
+    pub u2_gc_ag: f64,
+//    pub u12_gt_ag: f64, // Not currently considered a unique intron class
+    pub u12_at_ac: f64,
+}
+
+
+
+pub fn show_hmm_config(cfg: &HmmConfig) {
+    let s = &cfg.splice;
+    let l = &cfg.minimum_intron_lengths;
+    let w = &cfg.weights;
+    let p = &cfg.donor_fixed_penalty;
+
+    log_info!("HMM Config");
+    println!(
+        "  Splicing Flags: U:{} US:{} S:{} SC:{} C:{} CS:{} S:{} SU:{} U:{}",
+        s.utr5, s.utr5_start, s.start, s.start_coding, s.coding,
+        s.coding_stop, s.stop, s.stop_utr3, s.utr3,
+    );
+    println!(
+        "  Splicing - Minimum Intron Lengths: U2-GT-AG {}, U2-GC-AG {} U12-AT-AC {}",
+        l.u2_gt_ag, l.u2_gc_ag, /*l.u12_gt_ag,*/ l.u12_at_ac,  // Removed unused U12-GT-AG
+    );
+    println!(
+        "  Splicing - Weights: Donor {}, Acceptor {}",
+        w.donor, w.acceptor,
+    );
+    println!(
+        "  Splicing - Fixed Penalties: U2-GT-AG {}, U2-GC-AG {} U12-AT-AC {}",
+        p.u2_gt_ag, p.u2_gc_ag, /*p.u12_gt_ag,*/ p.u12_at_ac, // Removed unused U12-GT-AG
+    );
+
+    println!("  Coding - Weights: Start {}, Stop {}", w.start, w.stop);
+    println!(
+        "  Phase Mode: Implementation 1, Dilute to Total, Retention: {}",
+        cfg.phase_retain,
+    );
+    println!("  Prob Floor: {}", cfg.prob_floor);
+    println!();
+}
 
 
 fn convert_raw_pred<const N: usize>(raw_pred: &[f32; N]) -> [f64; N] {
@@ -72,14 +276,12 @@ impl ClassPredPenalty {
     }
 }
 
-const CLASS_PRED_PROB_FLOOR: f64 = 0.000_000_001; // Prevent infinite penalties
-
-impl From<&ClassPrediction> for ClassPredPenalty {
-    fn from(pred: &ClassPrediction) -> Self {
+impl ClassPredPenalty {
+    fn new(pred: &ClassPrediction, prob_floor: f64) -> Self {
         let raw_pred = pred.get();
 
         let converted_pred = convert_raw_pred(raw_pred);
-        let neg_log_prob = raw_pred_to_neg_log_prob(&converted_pred, CLASS_PRED_PROB_FLOOR);
+        let neg_log_prob = raw_pred_to_neg_log_prob(&converted_pred, prob_floor);
         let penalty = neg_log_prob_to_penalty(&neg_log_prob);
 
         ClassPredPenalty { /*neg_log_prob,*/ penalty }
@@ -111,15 +313,12 @@ impl PhasePredPenalty {
     }
 }
 
-const PHASE_PRED_PROB_FLOOR: f64 = 0.000_000_001; // Prevent infinite penalties
-                                                  //const PHASE_PRED_PROB_FLOOR: f64 = 0.5; // Limit impact of incorrect phase
-
-impl From<&PhasePrediction> for PhasePredPenalty {
-    fn from(pred: &PhasePrediction) -> Self {
+impl PhasePredPenalty {
+    fn new(pred: &PhasePrediction, prob_floor: f64) -> Self {
         let raw_pred = pred.get();
 
         let converted_pred = convert_raw_pred(raw_pred);
-        let neg_log_prob = raw_pred_to_neg_log_prob(&converted_pred, PHASE_PRED_PROB_FLOOR);
+        let neg_log_prob = raw_pred_to_neg_log_prob(&converted_pred, prob_floor);
         let penalty = neg_log_prob_to_penalty(&neg_log_prob);
 
         PhasePredPenalty { /* neg_log_prob, */ penalty }
@@ -178,13 +377,15 @@ impl PredPenalty {
 
 }
 
-const PHASE_RETAIN: f64 = 0.20; // Adjust as needed
+impl PredPenalty {
+    fn new(
+        class_pred: &ClassPrediction,
+        phase_pred: &PhasePrediction,
+        prob_floor: f64,
+        phase_retain: f64,
+    ) -> Self {
+        let phase_dilute = 1.0 - phase_retain;
 
-const PHASE_DILUTE: f64 = 1.0 - PHASE_RETAIN;
-const PRED_PROB_FLOOR: f64 = 0.000_000_001; // Prevent infinite penalties
-
-impl From<(&ClassPrediction, &PhasePrediction)> for PredPenalty {
-    fn from((class_pred, phase_pred): (&ClassPrediction, &PhasePrediction)) -> Self {
         let phase0 = phase_pred.get_phase0() as f64;
         let phase1 = phase_pred.get_phase1() as f64;
         let phase2 = phase_pred.get_phase2() as f64;
@@ -192,9 +393,7 @@ impl From<(&ClassPrediction, &PhasePrediction)> for PredPenalty {
         // Approach 1: rescale total phase to match coding and blend to dilution target (mean coding or total coding)
         let coding = class_pred.get_coding() as f64;
         let total_coding_phase = phase0 + phase1 + phase2;
-        let (phase0, phase1, phase2) = if total_coding_phase > 0.0
-        // Prevent div by zero risk
-        {
+        let (phase0, phase1, phase2) = if total_coding_phase > 0.0 {
             let phase_scale = coding / total_coding_phase;
             (
                 phase0 * phase_scale,
@@ -205,30 +404,12 @@ impl From<(&ClassPrediction, &PhasePrediction)> for PredPenalty {
             (coding / 3.0, coding / 3.0, coding / 3.0)
         };
 
-        //let dilution_target = coding / 3.0;
         let dilution_target = coding;
 
-        let phase0 = phase0 * PHASE_RETAIN + dilution_target * PHASE_DILUTE;
-        let phase1 = phase1 * PHASE_RETAIN + dilution_target * PHASE_DILUTE;
-        let phase2 = phase2 * PHASE_RETAIN + dilution_target * PHASE_DILUTE;
+        let phase0 = phase0 * phase_retain + dilution_target * phase_dilute;
+        let phase1 = phase1 * phase_retain + dilution_target * phase_dilute;
+        let phase2 = phase2 * phase_retain + dilution_target * phase_dilute;
 
-        /*
-                // Approach 2: rescale total phase to 1, dilute towards 1, then scale by coding
-                let total_coding_phase = phase0+phase1+phase2;
-                let (phase0, phase1, phase2) = if total_coding_phase > 0.0  // Prevent div by zero risk
-                    {
-                    let phase_scale = 1.0 / total_coding_phase;
-                    (phase0 * phase_scale, phase1 * phase_scale, phase2 * phase_scale)
-                    }
-                else { ( 1.0/3.0, 1.0/3.0, 1.0/3.0 ) };
-
-                let coding = class_pred.get_coding() as f64;
-                let phase0 = (phase0 * PHASE_RETAIN + 1.0 * PHASE_DILUTE) * coding;
-                let phase1 = (phase1 * PHASE_RETAIN + 1.0 * PHASE_DILUTE) * coding;
-                let phase2 = (phase2 * PHASE_RETAIN + 1.0 * PHASE_DILUTE) * coding;
-        */
-
-        // Convert to combined prob (not necessarily 1-hot)
         let raw_probs = [
             class_pred.get_intergenic() as f64,
             class_pred.get_utr() as f64,
@@ -238,14 +419,12 @@ impl From<(&ClassPrediction, &PhasePrediction)> for PredPenalty {
             class_pred.get_intron() as f64,
         ];
 
-        let neg_log_prob = raw_pred_to_neg_log_prob(&raw_probs, PRED_PROB_FLOOR);
+        let neg_log_prob = raw_pred_to_neg_log_prob(&raw_probs, prob_floor);
         let penalty = neg_log_prob_to_penalty(&neg_log_prob);
 
         PredPenalty { neg_log_prob, penalty }
     }
 }
-
-const BASE_PROB_FLOOR: f64 = 0.000_000_001; // Prevent infinite penalties
 
 #[derive(Clone, Copy)]
 pub struct BasesPenalty { // Ordering is C, A, T, G
@@ -288,11 +467,15 @@ impl BasesPenalty {
     }
 
     pub fn as_str(&self) -> char {
-        if self.penalty[0] < BASE_PROB_FLOOR {
+        // Pick the base whose normalised penalty is essentially zero (the
+        // most-likely class). Threshold is loose because the penalty array is
+        // already min-subtracted, so the winner sits at 0.0 in normal data.
+        const APPROX_ZERO: f64 = 1e-9;
+        if self.penalty[0] < APPROX_ZERO {
             'C'
-        } else if self.penalty[1] < BASE_PROB_FLOOR {
+        } else if self.penalty[1] < APPROX_ZERO {
             'A'
-        } else if self.penalty[2] < BASE_PROB_FLOOR {
+        } else if self.penalty[2] < APPROX_ZERO {
             'T'
         } else {
             'G'
@@ -300,12 +483,12 @@ impl BasesPenalty {
     }
 }
 
-impl From<&Bases> for BasesPenalty {
-    fn from(bases: &Bases) -> Self {
+impl BasesPenalty {
+    fn new(bases: &Bases, prob_floor: f64) -> Self {
         let raw_bases = bases.get();
 
         let converted_pred = convert_raw_pred(raw_bases);
-        let neg_log_prob = raw_pred_to_neg_log_prob(&converted_pred, BASE_PROB_FLOOR);
+        let neg_log_prob = raw_pred_to_neg_log_prob(&converted_pred, prob_floor);
         let penalty = neg_log_prob_to_penalty(&neg_log_prob);
 
         BasesPenalty { /*neg_log_prob, */ penalty }
@@ -313,6 +496,7 @@ impl From<&Bases> for BasesPenalty {
 }
 
 struct TransitionContext<'a> {
+    cfg: &'a HmmConfig,
     class_pred_pen: &'a [ClassPredPenalty],
     phase_pred_pen: &'a [PhasePredPenalty],
     pred_pen: &'a [PredPenalty],
@@ -324,6 +508,7 @@ struct TransitionContext<'a> {
 #[allow(dead_code)]
 impl<'a> TransitionContext<'a> {
     fn new(
+        cfg: &'a HmmConfig,
         class_pred_pen: &'a [ClassPredPenalty],
         phase_pred_pen: &'a [PhasePredPenalty],
         pred_pen: &'a [PredPenalty],
@@ -331,6 +516,7 @@ impl<'a> TransitionContext<'a> {
         offset: usize,
     ) -> TransitionContext<'a> {
         TransitionContext {
+            cfg,
             class_pred_pen,
             phase_pred_pen,
             pred_pen,
@@ -379,7 +565,7 @@ impl<'a> TransitionContext<'a> {
     fn get_donor_penalty_u2_gt_ag(&self, can_splice: bool) -> Option<f64> {
         if let (Some(ds), true) = (self.get_ctx(0, 2), can_splice) {
             let pen = ds[0].get_g() + ds[1].get_t();
-            Some(pen * DONOR_WEIGHT + DONOR_U2_GT_AG_FIXED_PENALTY)
+            Some(pen * self.cfg.weights.donor + self.cfg.donor_fixed_penalty.u2_gt_ag)
         } else {
             None
         }
@@ -388,7 +574,7 @@ impl<'a> TransitionContext<'a> {
     fn get_acceptor_penalty_u2_gt_ag(&self) -> Option<f64> {
         if let Some(us) = self.get_ctx(2, 0) {
             let pen = us[0].get_a() + us[1].get_g();
-            Some(pen * ACCEPTOR_WEIGHT)
+            Some(pen * self.cfg.weights.acceptor)
         } else {
             None
         }
@@ -401,7 +587,7 @@ impl<'a> TransitionContext<'a> {
                 ds[1].get_g() +
                 ds[2].get_g() +
                 ds[3].get_c();
-            Some(pen * DONOR_WEIGHT + DONOR_U2_GC_AG_FIXED_PENALTY)
+            Some(pen * self.cfg.weights.donor + self.cfg.donor_fixed_penalty.u2_gc_ag)
         } else {
             None
         }
@@ -410,7 +596,7 @@ impl<'a> TransitionContext<'a> {
     fn get_acceptor_penalty_u2_gc_ag(&self) -> Option<f64> {
         if let Some(us) = self.get_ctx(2, 0) {
             let pen = us[0].get_a() + us[1].get_g();
-            Some(pen * ACCEPTOR_WEIGHT)
+            Some(pen * self.cfg.weights.acceptor)
         } else {
             None
         }
@@ -427,7 +613,7 @@ impl<'a> TransitionContext<'a> {
                 ds[5].get_c() +
                 ds[6].get_t();
 
-            Some(pen * DONOR_WEIGHT + DONOR_U12_AT_AC_FIXED_PENALTY)
+            Some(pen * self.cfg.weights.donor + self.cfg.donor_fixed_penalty.u12_at_ac)
         } else {
             None
         }
@@ -436,7 +622,7 @@ impl<'a> TransitionContext<'a> {
     fn get_acceptor_penalty_u12_at_ac(&self) -> Option<f64> {
         if let Some(us) = self.get_ctx(2, 0) {
             let pen = us[0].get_a() + us[1].get_c();
-            Some(pen * ACCEPTOR_WEIGHT)
+            Some(pen * self.cfg.weights.acceptor)
         } else {
             None
         }
@@ -444,7 +630,7 @@ impl<'a> TransitionContext<'a> {
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
 pub enum HmmAnnotationLabel {
     Intergenic,
     UTR5,
@@ -633,71 +819,6 @@ impl std::cmp::PartialOrd for HmmState {
     }
 }
 
-// Allow/Prevent introns within each state and/or at state transitions
-
-const CAN_SPLICE_UTR5: bool = true;
-const CAN_SPLICE_UTR5_START: bool = true;
-const CAN_SPLICE_START: bool = true;
-const CAN_SPLICE_START_CODING: bool = true;
-const CAN_SPLICE_CODING: bool = true;
-const CAN_SPLICE_CODING_STOP: bool = true;
-const CAN_SPLICE_STOP: bool = true;
-const CAN_SPLICE_STOP_UTR3: bool = true;
-const CAN_SPLICE_UTR3: bool = true;
-
-const START_WEIGHT: f64 = 1_000.0;
-
-const DONOR_U2_GT_AG_FIXED_PENALTY: f64 = 0.0;
-const DONOR_U2_GC_AG_FIXED_PENALTY: f64 = 0.0;
-const DONOR_U12_GT_AG_FIXED_PENALTY: f64 = 0.0;
-const DONOR_U12_AT_AC_FIXED_PENALTY: f64 = 0.0;
-
-const DONOR_WEIGHT: f64 = 1.0;
-
-const ACCEPTOR_WEIGHT: f64 = 1.0;
-
-const STOP_WEIGHT: f64 = 1_000.0;
-
-pub fn show_hmm_config() {
-    println!("HMM Config");
-    println!(
-        "  Splicing Flags: U:{} US:{} S:{} SC:{} C:{} CS:{} S:{} SU:{} U:{}",
-        CAN_SPLICE_UTR5,
-        CAN_SPLICE_UTR5_START,
-        CAN_SPLICE_START,
-        CAN_SPLICE_START_CODING,
-        CAN_SPLICE_CODING,
-        CAN_SPLICE_CODING_STOP,
-        CAN_SPLICE_STOP,
-        CAN_SPLICE_STOP_UTR3,
-        CAN_SPLICE_UTR3
-    );
-
-    println!(
-        "  Splicing - Weights: Donor {}, Acceptor {}",
-        DONOR_WEIGHT, ACCEPTOR_WEIGHT
-    );
-    println!(
-        "  Splicing - Fixed Penalties: U2-GT-AG {}, U2-GT-AC {} U12-GT-AG {} U12-AT-AC {}",
-        DONOR_U2_GT_AG_FIXED_PENALTY,
-        DONOR_U2_GC_AG_FIXED_PENALTY,
-        DONOR_U12_GT_AG_FIXED_PENALTY,
-        DONOR_U12_AT_AC_FIXED_PENALTY
-    );
-
-    println!(
-        "  Coding - Weights: Start {}, Stop {}",
-        START_WEIGHT, STOP_WEIGHT
-    );
-    //println!("  Phase Mode: Off");
-    //println!("  Phase Mode: Additive, with {} prob floor", PHASE_PRED_PROB_FLOOR);
-    println!(
-        "  Phase Mode: Implementation 1, Dilute to Total, Retention: {}",
-        PHASE_RETAIN
-    );
-    println!();
-}
-
 impl HmmState {
     fn get_component_states(self) -> (HmmPrimaryState, HmmIntronState) {
         match self {
@@ -877,7 +998,8 @@ impl HmmState {
             HmmPrimaryState::Start0 | HmmPrimaryState::Stop0T =>
                 (pred.get_coding_phase0_neg_log_prob(), pred.get_coding_phase0_penalty()),
 
-            HmmPrimaryState::Coding1 => (pred.get_coding_phase2_penalty(), pred.get_coding_phase2_neg_log_prob()),
+            //HmmPrimaryState::Coding1 => (pred.get_coding_phase2_penalty(), pred.get_coding_phase2_neg_log_prob()),
+            HmmPrimaryState::Coding1 => (pred.get_coding_phase2_neg_log_prob(), pred.get_coding_phase2_penalty()),
             HmmPrimaryState::Start1 | HmmPrimaryState::Stop1TA | HmmPrimaryState::Stop1TG =>
                 (pred.get_coding_phase2_neg_log_prob(), pred.get_coding_phase2_penalty()),
 
@@ -887,13 +1009,13 @@ impl HmmState {
         }
     }
 
-    fn get_base_count(self) -> usize {
+    fn get_base_count(self, mil: &MinimalIntronLengths) -> usize {
         let (_, intron) = self.get_component_states();
 
         match intron {
-            HmmIntronState::U2GtAgDSS => 49,
-            HmmIntronState::U2GcAgDSS => 49,
-            HmmIntronState::U12AtAcDSS => 29,
+            HmmIntronState::U2GtAgDSS => max(mil.u2_gt_ag, 2) - 1,
+            HmmIntronState::U2GcAgDSS => max(mil.u2_gc_ag, 2) - 1,
+            HmmIntronState::U12AtAcDSS => max(mil.u12_at_ac, 2) - 1,
             _ => 1,
         }
     }
@@ -928,29 +1050,32 @@ impl HmmState {
 
             HmmPrimaryState::Start0 => trans_ctx
                 .get_downstream(1)
-                .map(|ds| ds[0].get_a() * START_WEIGHT),
+                .map(|ds| ds[0].get_a() * trans_ctx.cfg.weights.start),
             HmmPrimaryState::Start1 => trans_ctx
                 .get_downstream(1)
-                .map(|ds| ds[0].get_t() * START_WEIGHT),
+                .map(|ds| ds[0].get_t() * trans_ctx.cfg.weights.start),
             HmmPrimaryState::Start2 => trans_ctx
                 .get_downstream(1)
-                .map(|ds| ds[0].get_g() * START_WEIGHT),
+                .map(|ds| ds[0].get_g() * trans_ctx.cfg.weights.start),
 
             HmmPrimaryState::Coding0 => trans_ctx
                 .get_downstream(1)
-                .map(|ds| min3(ds[0].get_a(), ds[0].get_c(), ds[0].get_g()) * STOP_WEIGHT),
+                .map(|ds| {
+                    min3(ds[0].get_a(), ds[0].get_c(), ds[0].get_g())
+                        * trans_ctx.cfg.weights.stop
+                }),
             HmmPrimaryState::Coding1 => Some(0.0),
             HmmPrimaryState::Coding2 => Some(0.0),
 
             HmmPrimaryState::Stop0T => trans_ctx
                 .get_downstream(1)
-                .map(|ds| ds[0].get_t() * STOP_WEIGHT),
+                .map(|ds| ds[0].get_t() * trans_ctx.cfg.weights.stop),
             HmmPrimaryState::Stop1TA => trans_ctx
                 .get_downstream(1)
-                .map(|ds| ds[0].get_a() * STOP_WEIGHT),
+                .map(|ds| ds[0].get_a() * trans_ctx.cfg.weights.stop),
             HmmPrimaryState::Stop1TG => trans_ctx
                 .get_downstream(1)
-                .map(|ds| ds[0].get_g() * STOP_WEIGHT),
+                .map(|ds| ds[0].get_g() * trans_ctx.cfg.weights.stop),
             HmmPrimaryState::Stop2 => Some(0.0),
 
             HmmPrimaryState::UTR3 => Some(0.0),
@@ -998,19 +1123,19 @@ impl HmmState {
                     successors,
                     HmmState::UTR5IntronU2GtAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_UTR5,
+                    trans_ctx.cfg.splice.utr5,
                 );
                 consider_transition(
                     successors,
                     HmmState::UTR5IntronU2GcAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_UTR5,
+                    trans_ctx.cfg.splice.utr5,
                 );
                 consider_transition(
                     successors,
                     HmmState::UTR5IntronU12AtAcDSS,
                     Some(0.0),
-                    CAN_SPLICE_UTR5,
+                    trans_ctx.cfg.splice.utr5,
                 );
             }
 
@@ -1026,13 +1151,13 @@ impl HmmState {
                     successors,
                     HmmState::UTR5,
                     acceptor_penalty,
-                    CAN_SPLICE_UTR5,
+                    trans_ctx.cfg.splice.utr5,
                 );
                 consider_transition(
                     successors,
                     HmmState::Start0,
                     acceptor_penalty,
-                    CAN_SPLICE_UTR5_START,
+                    trans_ctx.cfg.splice.utr5_start,
                 );
             }
 
@@ -1042,19 +1167,19 @@ impl HmmState {
                     successors,
                     HmmState::Start0IntronU2GtAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_START,
+                    trans_ctx.cfg.splice.start,
                 );
                 consider_transition(
                     successors,
                     HmmState::Start0IntronU2GcAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_START,
+                    trans_ctx.cfg.splice.start,
                 );
                 consider_transition(
                     successors,
                     HmmState::Start0IntronU12AtAcDSS,
                     Some(0.0),
-                    CAN_SPLICE_START,
+                    trans_ctx.cfg.splice.start,
                 );
             }
 
@@ -1072,7 +1197,7 @@ impl HmmState {
                     successors,
                     HmmState::Start1,
                     acceptor_penalty,
-                    CAN_SPLICE_START,
+                    trans_ctx.cfg.splice.start,
                 );
             }
 
@@ -1082,19 +1207,19 @@ impl HmmState {
                     successors,
                     HmmState::Start1IntronU2GtAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_START,
+                    trans_ctx.cfg.splice.start,
                 );
                 consider_transition(
                     successors,
                     HmmState::Start1IntronU2GcAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_START,
+                    trans_ctx.cfg.splice.start,
                 );
                 consider_transition(
                     successors,
                     HmmState::Start1IntronU12AtAcDSS,
                     Some(0.0),
-                    CAN_SPLICE_START,
+                    trans_ctx.cfg.splice.start,
                 );
             }
 
@@ -1112,7 +1237,7 @@ impl HmmState {
                     successors,
                     HmmState::Start2,
                     acceptor_penalty,
-                    CAN_SPLICE_START,
+                    trans_ctx.cfg.splice.start,
                 );
             }
 
@@ -1123,19 +1248,19 @@ impl HmmState {
                     successors,
                     HmmState::Coding0IntronU2GtAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_CODING,
+                    trans_ctx.cfg.splice.coding,
                 );
                 consider_transition(
                     successors,
                     HmmState::Coding0IntronU2GcAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_CODING,
+                    trans_ctx.cfg.splice.coding,
                 );
                 consider_transition(
                     successors,
                     HmmState::Coding0IntronU12AtAcDSS,
                     Some(0.0),
-                    CAN_SPLICE_CODING,
+                    trans_ctx.cfg.splice.coding,
                 );
             }
 
@@ -1157,7 +1282,7 @@ impl HmmState {
                     successors,
                     HmmState::Coding1,
                     acceptor_penalty,
-                    CAN_SPLICE_CODING,
+                    trans_ctx.cfg.splice.coding,
                 );
             }
 
@@ -1168,19 +1293,19 @@ impl HmmState {
                     successors,
                     HmmState::Coding1IntronU2GtAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_CODING,
+                    trans_ctx.cfg.splice.coding,
                 );
                 consider_transition(
                     successors,
                     HmmState::Coding1IntronU2GcAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_CODING,
+                    trans_ctx.cfg.splice.coding,
                 );
                 consider_transition(
                     successors,
                     HmmState::Coding1IntronU12AtAcDSS,
                     Some(0.0),
-                    CAN_SPLICE_CODING,
+                    trans_ctx.cfg.splice.coding,
                 );
             }
 
@@ -1202,7 +1327,7 @@ impl HmmState {
                     successors,
                     HmmState::Coding2,
                     acceptor_penalty,
-                    CAN_SPLICE_CODING,
+                    trans_ctx.cfg.splice.coding,
                 );
             }
 
@@ -1214,19 +1339,19 @@ impl HmmState {
                     successors,
                     HmmState::Coding2IntronU2GtAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_CODING,
+                    trans_ctx.cfg.splice.coding,
                 );
                 consider_transition(
                     successors,
                     HmmState::Coding2IntronU2GcAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_CODING,
+                    trans_ctx.cfg.splice.coding,
                 );
                 consider_transition(
                     successors,
                     HmmState::Coding2IntronU12AtAcDSS,
                     Some(0.0),
-                    CAN_SPLICE_CODING,
+                    trans_ctx.cfg.splice.coding,
                 );
             }
 
@@ -1248,13 +1373,13 @@ impl HmmState {
                     successors,
                     HmmState::Coding0,
                     acceptor_penalty,
-                    CAN_SPLICE_CODING,
+                    trans_ctx.cfg.splice.coding,
                 );
                 consider_transition(
                     successors,
                     HmmState::Stop0T,
                     acceptor_penalty,
-                    CAN_SPLICE_CODING_STOP,
+                    trans_ctx.cfg.splice.coding_stop,
                 );
             }
 
@@ -1268,7 +1393,7 @@ impl HmmState {
                     consider_transition(
                         successors,
                         HmmState::Coding1,
-                        Some(min2(ds[0].get_c(), ds[0].get_t()) * STOP_WEIGHT),
+                        Some(min2(ds[0].get_c(), ds[0].get_t()) * trans_ctx.cfg.weights.stop),
                         true,
                     );
                 }
@@ -1277,19 +1402,19 @@ impl HmmState {
                     successors,
                     HmmState::Stop0TIntronU2GtAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_STOP,
+                    trans_ctx.cfg.splice.stop,
                 );
                 consider_transition(
                     successors,
                     HmmState::Stop0TIntronU2GcAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_STOP,
+                    trans_ctx.cfg.splice.stop,
                 );
                 consider_transition(
                     successors,
                     HmmState::Stop0TIntronU12AtAcDSS,
                     Some(0.0),
-                    CAN_SPLICE_STOP,
+                    trans_ctx.cfg.splice.stop,
                 );
             }
 
@@ -1312,8 +1437,8 @@ impl HmmState {
                     consider_transition(
                         successors,
                         HmmState::Coding1,
-                        Some(acceptor_penalty + min2(ds[0].get_c(), ds[0].get_t()) * STOP_WEIGHT),
-                        CAN_SPLICE_STOP,
+                        Some(acceptor_penalty + min2(ds[0].get_c(), ds[0].get_t()) * trans_ctx.cfg.weights.stop),
+                        trans_ctx.cfg.splice.stop,
                     );
                 }
             }
@@ -1325,13 +1450,13 @@ impl HmmState {
                     consider_transition(
                         successors,
                         HmmState::Stop2,
-                        Some(min2(ds[0].get_a(), ds[0].get_g()) * STOP_WEIGHT),
+                        Some(min2(ds[0].get_a(), ds[0].get_g()) * trans_ctx.cfg.weights.stop),
                         true,
                     );
                     consider_transition(
                         successors,
                         HmmState::Coding2,
-                        Some(min2(ds[0].get_c(), ds[0].get_t()) * STOP_WEIGHT),
+                        Some(min2(ds[0].get_c(), ds[0].get_t()) * trans_ctx.cfg.weights.stop),
                         true,
                     );
                 }
@@ -1340,19 +1465,19 @@ impl HmmState {
                     successors,
                     HmmState::Stop1TAIntronU2GtAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_STOP,
+                    trans_ctx.cfg.splice.stop,
                 );
                 consider_transition(
                     successors,
                     HmmState::Stop1TAIntronU2GcAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_STOP,
+                    trans_ctx.cfg.splice.stop,
                 );
                 consider_transition(
                     successors,
                     HmmState::Stop1TAIntronU12AtAcDSS,
                     Some(0.0),
-                    CAN_SPLICE_STOP,
+                    trans_ctx.cfg.splice.stop,
                 );
             }
 
@@ -1377,13 +1502,13 @@ impl HmmState {
                     consider_transition(
                         successors,
                         HmmState::Stop2,
-                        Some(acceptor_penalty + min2(ds[0].get_a(), ds[0].get_g()) * STOP_WEIGHT),
+                        Some(acceptor_penalty + min2(ds[0].get_a(), ds[0].get_g()) * trans_ctx.cfg.weights.stop),
                         true,
                     );
                     consider_transition(
                         successors,
                         HmmState::Coding2,
-                        Some(acceptor_penalty + min2(ds[0].get_c(), ds[0].get_t()) * STOP_WEIGHT),
+                        Some(acceptor_penalty + min2(ds[0].get_c(), ds[0].get_t()) * trans_ctx.cfg.weights.stop),
                         true,
                     );
                 }
@@ -1396,13 +1521,13 @@ impl HmmState {
                     consider_transition(
                         successors,
                         HmmState::Stop2,
-                        Some(ds[0].get_a() * STOP_WEIGHT),
+                        Some(ds[0].get_a() * trans_ctx.cfg.weights.stop),
                         true,
                     );
                     consider_transition(
                         successors,
                         HmmState::Coding2,
-                        Some(min3(ds[0].get_c(), ds[0].get_g(), ds[0].get_t()) * STOP_WEIGHT),
+                        Some(min3(ds[0].get_c(), ds[0].get_g(), ds[0].get_t()) * trans_ctx.cfg.weights.stop),
                         true,
                     );
                 }
@@ -1411,19 +1536,19 @@ impl HmmState {
                     successors,
                     HmmState::Stop1TGIntronU2GtAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_STOP,
+                    trans_ctx.cfg.splice.stop,
                 );
                 consider_transition(
                     successors,
                     HmmState::Stop1TGIntronU2GcAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_STOP,
+                    trans_ctx.cfg.splice.stop,
                 );
                 consider_transition(
                     successors,
                     HmmState::Stop1TGIntronU12AtAcDSS,
                     Some(0.0),
-                    CAN_SPLICE_STOP,
+                    trans_ctx.cfg.splice.stop,
                 );
             }
 
@@ -1448,7 +1573,7 @@ impl HmmState {
                     consider_transition(
                         successors,
                         HmmState::Stop2,
-                        Some(acceptor_penalty + ds[0].get_a() * STOP_WEIGHT),
+                        Some(acceptor_penalty + ds[0].get_a() * trans_ctx.cfg.weights.stop),
                         true,
                     );
                     consider_transition(
@@ -1456,7 +1581,7 @@ impl HmmState {
                         HmmState::Coding2,
                         Some(
                             acceptor_penalty
-                                + min3(ds[0].get_c(), ds[0].get_g(), ds[0].get_t()) * STOP_WEIGHT,
+                                + min3(ds[0].get_c(), ds[0].get_g(), ds[0].get_t()) * trans_ctx.cfg.weights.stop,
                         ),
                         true,
                     );
@@ -1469,19 +1594,19 @@ impl HmmState {
                     successors,
                     HmmState::UTR3IntronU2GtAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_STOP_UTR3,
+                    trans_ctx.cfg.splice.stop_utr3,
                 );
                 consider_transition(
                     successors,
                     HmmState::UTR3IntronU2GcAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_STOP_UTR3,
+                    trans_ctx.cfg.splice.stop_utr3,
                 );
                 consider_transition(
                     successors,
                     HmmState::UTR3IntronU12AtAcDSS,
                     Some(0.0),
-                    CAN_SPLICE_STOP_UTR3,
+                    trans_ctx.cfg.splice.stop_utr3,
                 );
             }
 
@@ -1492,19 +1617,19 @@ impl HmmState {
                     successors,
                     HmmState::UTR3IntronU2GtAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_UTR3,
+                    trans_ctx.cfg.splice.utr3,
                 );
                 consider_transition(
                     successors,
                     HmmState::UTR3IntronU2GcAgDSS,
                     Some(0.0),
-                    CAN_SPLICE_UTR3,
+                    trans_ctx.cfg.splice.utr3,
                 );
                 consider_transition(
                     successors,
                     HmmState::UTR3IntronU12AtAcDSS,
                     Some(0.0),
-                    CAN_SPLICE_UTR3,
+                    trans_ctx.cfg.splice.utr3,
                 );
             }
 
@@ -1520,7 +1645,7 @@ impl HmmState {
                     successors,
                     HmmState::UTR3,
                     acceptor_penalty,
-                    CAN_SPLICE_UTR3,
+                    trans_ctx.cfg.splice.utr3,
                 );
             }
         }
@@ -1569,6 +1694,7 @@ impl HmmEval {
             state,
             previous_state,
             accum_penalty,
+            //trans_penalty: trans_penalty + 1, // FAKE
             trans_penalty,
             neg_log_prob
         }
@@ -1595,6 +1721,7 @@ impl PartialOrd for HmmEval {
 const MAX_EVALS: u64 = 100_000_000_000;
 
 pub struct PredictionHmm {
+    cfg: HmmConfig,
     class_pred_pen: Vec<ClassPredPenalty>,
     phase_pred_pen: Vec<PhasePredPenalty>,
 
@@ -1607,7 +1734,13 @@ pub struct PredictionHmm {
 }
 
 impl PredictionHmm {
-    pub fn new(bp_vector: Vec<(Bases, ClassPrediction, PhasePrediction)>) -> PredictionHmm {
+    pub fn new(
+        bp_vector: Vec<(Bases, ClassPrediction, PhasePrediction)>,
+        cfg: HmmConfig,
+    ) -> PredictionHmm {
+        let prob_floor = cfg.prob_floor;
+        let phase_retain = cfg.phase_retain;
+
         let mut class_pred_pen = Vec::with_capacity(bp_vector.len());
         let mut phase_pred_pen = Vec::with_capacity(bp_vector.len());
         let mut pred_pen = Vec::with_capacity(bp_vector.len());
@@ -1615,11 +1748,11 @@ impl PredictionHmm {
         let mut bases_pen = Vec::with_capacity(bp_vector.len());
 
         for (bases, class_pred, phase_pred) in bp_vector.iter() {
-            class_pred_pen.push(class_pred.into());
-            phase_pred_pen.push(phase_pred.into());
-            pred_pen.push((class_pred, phase_pred).into());
+            class_pred_pen.push(ClassPredPenalty::new(class_pred, prob_floor));
+            phase_pred_pen.push(PhasePredPenalty::new(phase_pred, prob_floor));
+            pred_pen.push(PredPenalty::new(class_pred, phase_pred, prob_floor, phase_retain));
 
-            bases_pen.push(bases.into());
+            bases_pen.push(BasesPenalty::new(bases, prob_floor));
         }
 
         let total_states = (bp_vector.len() + 1) * HMM_STATES;
@@ -1627,6 +1760,7 @@ impl PredictionHmm {
 
         let eval_heap = BinaryHeap::new();
         PredictionHmm {
+            cfg,
             class_pred_pen,
             phase_pred_pen,
             pred_pen,
@@ -1664,12 +1798,15 @@ impl PredictionHmm {
         }
 
         let trans_ctx = TransitionContext::new(
+            &self.cfg,
             &self.class_pred_pen,
             &self.phase_pred_pen,
             &self.pred_pen,
             &self.bases_pen,
             eval.end_position,
         );
+
+        let mil = self.cfg.minimum_intron_lengths.clone();
 
         let mut successors = Vec::with_capacity(HMM_STATES);
         eval.state
@@ -1680,7 +1817,7 @@ impl PredictionHmm {
             let mut local_penalty = trans_penalty;
 
             let start_position = eval.end_position;
-            let end_position = start_position + next_state.get_base_count();
+            let end_position = start_position + next_state.get_base_count(&mil);
 
             if end_position <= self.class_pred_pen.len()
             // Drop 'long' state picked near end
@@ -1744,18 +1881,24 @@ pub struct HmmStateRegion {
     end_pos: usize,
     annotation_label: HmmAnnotationLabel,
 
-    trans_penalty: u64, // Transition penalty into each state in the region
+    entry_trans_penalty: u64, // Transition penalty into first state in the region
+    mid_trans_penalty: u64, // Total transition penalty between each state pair inside the region
+    exit_trans_penalty: u64, // Transition penalty out of the final state in the region
+
     neg_log_prob: u64   // Negative Log probability of all bases within this region
 }
 
 impl HmmStateRegion {
     fn new(start_pos: usize, end_pos: usize, annotation_label: HmmAnnotationLabel,
-           trans_penalty: u64, neg_log_prob: u64) -> HmmStateRegion {
+           entry_trans_penalty: u64, mid_trans_penalty: u64, exit_trans_penalty: u64,
+           neg_log_prob: u64) -> HmmStateRegion {
         HmmStateRegion {
             start_pos,
             end_pos,
             annotation_label,
-            trans_penalty,
+            entry_trans_penalty,
+            mid_trans_penalty,
+            exit_trans_penalty,
             neg_log_prob
         }
     }
@@ -1783,6 +1926,7 @@ impl HmmStateRegion {
         let mut coding_length = 0;
 
         for region in regions {
+
             if region.annotation_label == HmmAnnotationLabel::Intergenic {
                 if current_vec.len() > 0 {
                     vec_of_vecs.push((current_vec, coding_length));
@@ -1793,9 +1937,9 @@ impl HmmStateRegion {
                 if region.annotation_label == HmmAnnotationLabel::Coding {
                     coding_length += region.end_pos - region.start_pos;
                 }
-
-                current_vec.push(region);
             }
+
+            current_vec.push(region);
         }
 
         if current_vec.len() > 0 {
@@ -1822,7 +1966,8 @@ impl PredictionHmmSolution {
         let mut eval = &self.eval;
         let mut region_end_pos = eval.end_position;
 
-        let mut accum_trans_penalty = 0u64;
+        let mut boundary_trans_penalty = 0u64;
+        let mut accum_mid_trans_penalty = 0u64;
         let mut accum_neg_log_prob = 0u64;
 
         // State positions are inclusive start, exclusive end: state.start_pos = 0, state.end_pos = 1 is the first real state (almost always)
@@ -1830,25 +1975,36 @@ impl PredictionHmmSolution {
 
         // Extract all but the 'start dummy' HmmEval entry
         while eval.end_position > 0 {
-            accum_trans_penalty += eval.trans_penalty;
+
             accum_neg_log_prob += eval.neg_log_prob;
 
-            if eval.state.get_annotation_label() != eval.previous_state.get_annotation_label()
-            // If prev state changes annotation label
-            {
-                println!("Generate a standard HmmStateRegion S: {} E: {} Label: {} Trans: {} NegLog: {}",
+            if eval.state.get_annotation_label() == eval.previous_state.get_annotation_label() { // If prev state matches annotation label
+                accum_mid_trans_penalty += eval.trans_penalty;
+
+            } else {
+                let neg_log_rate = accum_neg_log_prob / ((region_end_pos - eval.start_position) as u64);
+
+                let entry_trans_penalty = eval.trans_penalty;
+                let exit_trans_penalty = boundary_trans_penalty;
+
+                vprintln!("Generate a standard HmmStateRegion S: {} E: {} Label: {} Trans: {} {} {} NegLog: {} {}",
                          eval.start_position, region_end_pos, eval.state.get_annotation_label().to_str(),
-                         accum_trans_penalty, accum_neg_log_prob);
+                         entry_trans_penalty, accum_mid_trans_penalty, exit_trans_penalty,
+                         accum_neg_log_prob, neg_log_rate);
 
                 regions.push(HmmStateRegion::new(
                     eval.start_position,
                     region_end_pos,
                     eval.state.get_annotation_label(),
-                    accum_trans_penalty,
+                    entry_trans_penalty,
+                    accum_mid_trans_penalty,
+                    exit_trans_penalty,
                     accum_neg_log_prob
                 ));
                 region_end_pos = eval.start_position; // Equivalent to previous_state.end_position
-                accum_trans_penalty = 0;
+
+                boundary_trans_penalty = entry_trans_penalty;
+                accum_mid_trans_penalty = 0;
                 accum_neg_log_prob = 0;
             }
 
@@ -1860,14 +2016,23 @@ impl PredictionHmmSolution {
 
         // Drain accumulated intergenic region if non-zero length (almost always)
         if region_end_pos > 0 {
-            println!("Generate a starting Intergenic HmmStateRegion S: {} E: {} Label: {} Trans: {} NegLog: {}",
+            let neg_log_rate = accum_neg_log_prob / (region_end_pos as u64);
+
+            let entry_trans_penalty = eval.trans_penalty;
+            let exit_trans_penalty = boundary_trans_penalty;
+
+            vprintln!("Generate a starting Intergenic HmmStateRegion S: {} E: {} Label: {} Trans: {} {} {} NegLog: {} {}",
                      0, region_end_pos, eval.state.get_annotation_label().to_str(),
-                     accum_trans_penalty, accum_neg_log_prob);
+                     entry_trans_penalty, accum_mid_trans_penalty, exit_trans_penalty,
+                     accum_neg_log_prob, neg_log_rate);
+
             regions.push(HmmStateRegion::new(
                 eval.start_position,
                 region_end_pos,
                 eval.state.get_annotation_label(),
-                accum_trans_penalty,
+                entry_trans_penalty,
+                accum_mid_trans_penalty,
+                exit_trans_penalty,
                 accum_neg_log_prob
             ));
         }
@@ -2089,3 +2254,164 @@ Chr1    HelixerPost     CDS     24546   24655   .       +       0       ID=Athal
 
 
  */
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- numeric primitives ---
+
+    /// Inputs below the floor are clamped before the log so penalties stay
+    /// finite. `1.0` collapses to a penalty of `0.0`. Tweak these constants
+    /// at your peril.
+    #[test]
+    fn raw_pred_to_neg_log_prob_clamps_to_floor_and_logs() {
+        let floor = 1e-9_f64;
+        let out = raw_pred_to_neg_log_prob(&[0.0, 1e-12, 0.5, 1.0], floor);
+        let floored = -(floor.log2());
+        assert!((out[0] - floored).abs() < 1e-12, "0.0 should be clamped to floor");
+        assert!((out[1] - floored).abs() < 1e-12, "1e-12 should be clamped to floor");
+        assert!((out[2] - 1.0).abs() < 1e-12, "-log2(0.5) == 1.0");
+        assert!(out[3].abs() < 1e-12, "-log2(1.0) == 0.0");
+    }
+
+    #[test]
+    fn neg_log_prob_to_penalty_subtracts_minimum() {
+        let pen = neg_log_prob_to_penalty(&[5.0_f64, 2.0, 3.0, 7.0]);
+        assert_eq!(pen, [3.0, 0.0, 1.0, 5.0]);
+    }
+
+    /// The "winning" base in a one-hot Bases has penalty 0, so `as_str`
+    /// returns it. Two bases pre-normalisation -> after penalty conversion
+    /// the wrong one still differs from zero by more than APPROX_ZERO.
+    #[test]
+    fn bases_penalty_as_str_returns_winner() {
+        // Pure-A
+        let pen = BasesPenalty::new(&Bases::new([0.0, 1.0, 0.0, 0.0]), 1e-9);
+        assert_eq!(pen.as_str(), 'A');
+        // Pure-T
+        let pen = BasesPenalty::new(&Bases::new([0.0, 0.0, 1.0, 0.0]), 1e-9);
+        assert_eq!(pen.as_str(), 'T');
+        // Pure-G
+        let pen = BasesPenalty::new(&Bases::new([0.0, 0.0, 0.0, 1.0]), 1e-9);
+        assert_eq!(pen.as_str(), 'G');
+        // Pure-C
+        let pen = BasesPenalty::new(&Bases::new([1.0, 0.0, 0.0, 0.0]), 1e-9);
+        assert_eq!(pen.as_str(), 'C');
+    }
+
+    // --- PredPenalty phase-blending math ---
+
+    /// When the model emits zero for all three coding-phase channels the
+    /// constructor falls back to an even coding/3 split per phase, then
+    /// blends with the dilution target. With phase_retain == 0 the result
+    /// must equal pure-coding probability for each phase.
+    /// (Tolerance is loose because raw probs go through f32->f64.)
+    #[test]
+    fn pred_penalty_handles_zero_phase_with_phase_retain_zero() {
+        let class = ClassPrediction::new([0.7, 0.0, 0.3, 0.0]); // 0.3 coding
+        let phase = PhasePrediction::new([1.0, 0.0, 0.0, 0.0]); // all in non-coding
+        let pp = PredPenalty::new(&class, &phase, 1e-9, 0.0);
+
+        // raw_probs layout (post-blend): [intergenic, utr, phase0, phase1, phase2, intron]
+        // With phase_retain=0 the dilution_target (= coding) wins; phase0/1/2 = coding = 0.3.
+        let intergenic_nlp = -(0.7_f32 as f64).log2();
+        let coding_nlp = -(0.3_f32 as f64).log2();
+        assert!((pp.neg_log_prob[0] - intergenic_nlp).abs() < 1e-6);
+        assert!((pp.neg_log_prob[2] - coding_nlp).abs() < 1e-6);
+        assert!((pp.neg_log_prob[3] - coding_nlp).abs() < 1e-6);
+        assert!((pp.neg_log_prob[4] - coding_nlp).abs() < 1e-6);
+    }
+
+    /// With phase_retain == 1 (trust the predicted phase fully) and a perfect
+    /// phase-0 prediction, the three phase channels should split coding
+    /// fully into phase 0.
+    #[test]
+    fn pred_penalty_full_phase_retain_routes_coding_into_predicted_phase() {
+        let class = ClassPrediction::new([0.1, 0.0, 0.9, 0.0]); // 0.9 coding
+        let phase = PhasePrediction::new([0.0, 1.0, 0.0, 0.0]); // phase 0
+        let pp = PredPenalty::new(&class, &phase, 1e-9, 1.0);
+
+        let phase0_nlp = -(0.9_f32 as f64).log2();
+        // Phase 1 and 2 receive ~0 probability — penalty bottoms out at the floor.
+        let floor_nlp = -(1e-9_f64).log2();
+        assert!((pp.neg_log_prob[2] - phase0_nlp).abs() < 1e-6);
+        assert!((pp.neg_log_prob[3] - floor_nlp).abs() < 1e-6);
+        assert!((pp.neg_log_prob[4] - floor_nlp).abs() < 1e-6);
+    }
+
+    // --- HmmStateRegion::split_genes ---
+
+    fn region(start: usize, end: usize, label: HmmAnnotationLabel) -> HmmStateRegion {
+        HmmStateRegion::new(start, end, label, 0, 0, 0, 0)
+    }
+
+    /// `split_genes` flushes the current bucket each time it hits an
+    /// intergenic *after* the bucket already has content. The intergenic
+    /// itself is pushed into the *next* bucket. So a leading intergenic
+    /// stays inside the first gene, and a trailing intergenic becomes a
+    /// final bucket of its own.
+    #[test]
+    fn split_genes_partitions_on_intergenic_and_sums_coding() {
+        let regions = vec![
+            region(0, 100, HmmAnnotationLabel::Intergenic),
+            region(100, 110, HmmAnnotationLabel::UTR5),
+            region(110, 113, HmmAnnotationLabel::Start),
+            region(113, 200, HmmAnnotationLabel::Coding),
+            region(200, 203, HmmAnnotationLabel::Stop),
+            region(203, 210, HmmAnnotationLabel::UTR3),
+            region(210, 500, HmmAnnotationLabel::Intergenic),
+            region(500, 600, HmmAnnotationLabel::Coding),
+            region(600, 700, HmmAnnotationLabel::Intergenic),
+        ];
+        let genes = HmmStateRegion::split_genes(regions);
+        assert_eq!(genes.len(), 3);
+
+        // Bucket 0: leading Intergenic + first full gene structure.
+        // Coding length = 200 - 113 = 87.
+        assert_eq!(genes[0].1, 87);
+        assert_eq!(genes[0].0.len(), 6);
+        assert_eq!(
+            genes[0].0[0].get_annotation_label(),
+            HmmAnnotationLabel::Intergenic
+        );
+
+        // Bucket 1: middle Intergenic + Coding(500,600). Coding length = 100.
+        assert_eq!(genes[1].1, 100);
+        assert_eq!(genes[1].0.len(), 2);
+        assert_eq!(
+            genes[1].0[0].get_annotation_label(),
+            HmmAnnotationLabel::Intergenic
+        );
+
+        // Bucket 2: trailing Intergenic alone, no coding.
+        assert_eq!(genes[2].1, 0);
+        assert_eq!(genes[2].0.len(), 1);
+        assert_eq!(
+            genes[2].0[0].get_annotation_label(),
+            HmmAnnotationLabel::Intergenic
+        );
+    }
+
+    /// Regions with no intergenic at all stay in a single bucket. Coding
+    /// length still totals only Coding regions, not Start/Stop/UTR.
+    #[test]
+    fn split_genes_no_intergenic_single_bucket() {
+        let regions = vec![
+            region(0, 5, HmmAnnotationLabel::UTR5),
+            region(5, 8, HmmAnnotationLabel::Start),
+            region(8, 50, HmmAnnotationLabel::Coding),
+            region(50, 53, HmmAnnotationLabel::Stop),
+        ];
+        let genes = HmmStateRegion::split_genes(regions);
+        assert_eq!(genes.len(), 1);
+        assert_eq!(genes[0].1, 42); // only the 8..50 Coding region counts
+        assert_eq!(genes[0].0.len(), 4);
+    }
+
+    #[test]
+    fn split_genes_empty_input_yields_no_genes() {
+        let genes = HmmStateRegion::split_genes(Vec::new());
+        assert!(genes.is_empty());
+    }
+}
