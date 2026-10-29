@@ -5,10 +5,11 @@ use helixer_post_bin::analysis::hmm::show_hmm_config;
 use helixer_post_bin::analysis::rater::{RatingWriter, SequenceRating};
 use helixer_post_bin::analysis::{Analyzer, FileConfig};
 use helixer_post_bin::gff::GffWriter;
+use helixer_post_bin::progress::{hms, Progress};
 use helixer_post_bin::results::raw::RawHelixerPredictions;
 use helixer_post_bin::results::HelixerResults;
 use helixer_post_bin::verbose::{is_verbose, set_verbose};
-use helixer_post_bin::vprintln;
+use helixer_post_bin::{log_info, vprintln};
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
@@ -112,8 +113,9 @@ struct Cli {
 
     /// Print detailed progress and debug output: per-sequence and per-strand
     /// ratings, one line per sequence and candidate window, and the decoded HMM
-    /// regions. Without it, stdout holds the active config, the species-level stats and
-    /// a total line with the gene count, and warnings go to stderr.
+    /// regions. Without it, stdout holds the active config, a progress line per 5% of
+    /// the genome (in bp), the species-level stats and a total line with the gene count
+    /// and run time, and warnings go to stderr.
     #[arg(long, short = 'v')]
     verbose: bool,
 }
@@ -181,7 +183,7 @@ fn main() -> Result<()> {
     );
 
     show_hmm_config(&hmm_cfg);
-    println!(
+    log_info!(
         "Pipeline config: window_size={} edge_threshold={} peak_threshold={} min_coding_length={} threads={}",
         window_cfg.window_size,
         window_cfg.edge_threshold,
@@ -221,6 +223,19 @@ fn main() -> Result<()> {
         None => RatingWriter::disabled(),
     };
 
+    let (total_seqs, total_bp) = all_species
+        .iter()
+        .flat_map(|species| helixer_res.get_sequences_for_species(species.get_id()))
+        .fold((0, 0), |(seqs, bp), seq_id| {
+            (seqs + 1, bp + helixer_res.get_sequence_by_id(*seq_id).get_length())
+        });
+    log_info!(
+        "Processing {} sequences ({:.1} Mbp)",
+        total_seqs,
+        total_bp as f64 / 1e6
+    );
+    let mut progress = Progress::new(total_bp, total_seqs);
+
     let mut total_count = 0;
     let mut total_length = 0;
     let mut total_genes = 0;
@@ -255,17 +270,18 @@ fn main() -> Result<()> {
             total_count += count;
             total_length += length;
             total_genes += genes;
+            progress.sequence_done(seq.get_length(), genes);
         }
 
         if is_verbose() {
-            println!(
+            log_info!(
                 "Forward for Species {} - {}",
                 species.get_name(),
                 id.inner()
             );
             fwd_species_rating.dump(analyzer.has_ref());
 
-            println!(
+            log_info!(
                 "Reverse for Species {} - {}",
                 species.get_name(),
                 id.inner()
@@ -277,13 +293,16 @@ fn main() -> Result<()> {
         species_rating.accumulate(&fwd_species_rating);
         species_rating.accumulate(&rev_species_rating);
 
-        println!("Total for Species {} - {}", species.get_name(), id.inner());
+        log_info!("Total for Species {} - {}", species.get_name(), id.inner());
         species_rating.dump(analyzer.has_ref());
     }
 
-    println!(
-        "Total: {} genes, {}bp across {} windows",
-        total_genes, total_length, total_count
+    log_info!(
+        "Total: {} genes, {}bp across {} windows in {}",
+        total_genes,
+        total_length,
+        total_count,
+        hms(progress.elapsed())
     );
     Ok(())
 }

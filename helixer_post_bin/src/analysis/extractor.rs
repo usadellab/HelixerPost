@@ -3,6 +3,7 @@ use crate::results::conv::{
 };
 use crate::results::iter::{BlockedDataset2D, BlockedDataset2DIter};
 use crate::results::{HelixerResults, Result, SequenceID, SpeciesID};
+use crate::log_warn;
 
 // Hard coded as Bases / Predictions for now. Would make more sense to have all base-level datasets optionally available (and seekable)
 pub struct BasePredictionExtractor<
@@ -54,11 +55,11 @@ impl<'a> BasePredictionExtractor<'a, i8, i8> {
                 }))
             }
             (Some(_), None) => {
-                eprintln!("Warning: Ref Class predictions without Ref Phase predictions");
+                log_warn!("Ref Class predictions without Ref Phase predictions");
                 Ok(None)
             }
             (None, Some(_)) => {
-                eprintln!("Warning: Ref Phase predictions without Ref Class predictions");
+                log_warn!("Ref Phase predictions without Ref Class predictions");
                 Ok(None)
             }
             (None, None) => Ok(None),

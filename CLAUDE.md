@@ -34,8 +34,7 @@ Key flags:
 - `-c, --config <path>` — YAML config file (full schema in `example/default_config.yml`).
 - `--print-default-config` — dump built-in defaults to stdout as YAML, then exit. Positional args are not required when this flag is present.
 - `--rating <path>` — per-base rating file, only written when given (`RatingWriter::disabled()` otherwise skips all per-base formatting); roughly 230 bytes per bp.
-- `-v, --verbose` — enables the per-sequence/per-strand rating dumps, the per-sequence and per-window progress lines and the per-region HMM traces. Without it, stdout holds the HMM/pipeline config, the species total rating and the `Total:` line (genes, bp, windows).
-- `-j, --threads <N>` — defaults to `std::thread::available_parallelism()`.
+- `-v, --verbose` — enables the per-sequence/per-strand rating dumps, the per-sequence and per-window progress lines and the per-region HMM traces. Without it, stdout holds the HMM/pipeline config, the progress lines, the species total rating and the `Total:` line (genes, bp, windows, run time).- `-j, --threads <N>` — defaults to `std::thread::available_parallelism()`.
 - `--window-size`, `--edge-threshold`, `--peak-threshold`, `--min-coding-length` — pass-1/3 overrides.
 - `--hmm-prob-floor`, `--hmm-phase-retain`, `--hmm-{start,stop,donor,acceptor}-weight` — pass-2 HMM tuning overrides.
 - `--min-intron-length` (sets `u2_gt_ag` and `u2_gc_ag`; U12-type GT-AG introns are decoded as U2 and follow it too) and `--min-intron-length-u12` (sets `u12_at_ac`) — pass-2 minimum intron lengths, enforced inside the decoder (floor 2).
@@ -82,7 +81,7 @@ Things to keep in mind when editing the pipeline:
 - Forward and reverse strands are processed independently with separate ratings; both feed the same `GffWriter`. The `gene_idx` counter is shared so gene IDs stay unique within a sequence.
 - `main.rs` rejects multi-species inputs with a clear `bail!` for GFF output (was an `assert!` pre-Phase A).
 - Errors propagate through `process_sequence` / `process_sequence_1d` as `anyhow::Result`; the previous `panic!("No solution at …")` is now a `bail!`. Note: the workspace still has `panic = "abort"`, so a worker-thread panic (e.g. `MAX_EVALS` exceeded inside `PredictionHmm::solve`) will still abort the whole process — those paths haven't been migrated to `Result`.
-- Verbosity is a process-wide flag in `verbose.rs` (`set_verbose` in `main`, `is_verbose()`), so worker threads and the HMM trace can read it without parameter threading. Debug and progress prints use the `vprintln!` macro; multi-line dumps are wrapped in `if is_verbose()`. Warnings go to stderr via `eprintln!` regardless of verbosity.
+- Verbosity is a process-wide flag in `verbose.rs` (`set_verbose` in `main`, `is_verbose()`), so worker threads and the HMM trace can read it without parameter threading. Log lines use the macros in `verbose.rs`, which prefix the local time and a level in the Helixer log format (`%Y-%m-%d %H:%M:%S, I: ...`, via `chrono`): `log_info!` (stdout), `log_warn!` (stderr, regardless of verbosity) and `vprintln!` (stdout, `D`, only with `--verbose`). Multi-line dumps (rating tables, HMM config details) stay unprefixed and are wrapped in `if is_verbose()` where verbose-only. `progress::Progress` is fed by the sequence loop in `main` and prints a progress line per `PROGRESS_STEP` (5) percent of the genome in bp; there are no flags for it.
 - `analysis::hmm::show_hmm_config(&HmmConfig)` is called once at startup so the active HMM tuning is visible in any run log; `main` also prints the pipeline (window/filter) config on the next line.
 
 ### `gff.rs` — output

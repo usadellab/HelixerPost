@@ -13,7 +13,7 @@ use crate::gff::GffWriter;
 use crate::results::conv::{ArrayConvInto, Bases, ClassPrediction, PhasePrediction};
 use crate::results::{Sequence, Species};
 use crate::verbose::is_verbose;
-use crate::vprintln;
+use crate::{log_info, vprintln};
 use std::io::Write;
 
 pub mod extractor;
@@ -136,102 +136,6 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
     pub fn has_ref(&self) -> bool {
         self.comp_extractor.has_ref()
     }
-/*
-    fn process_sequence_1d<W, BPI>(
-        &self,
-        species: &Species,
-        seq: &Sequence,
-        rev: bool,
-        bp_iter: BasePredictionWindowThresholdIterator<BPI>,
-        gene_idx: &mut usize,
-        rater: &mut SequenceRater,
-        gff_writer: &mut GffWriter<W>,
-    ) -> Result<(usize, usize)>
-    where
-        W: Write,
-        BPI: Iterator<Item = (Bases, ClassPrediction, PhasePrediction)>,
-    {
-        let min_coding_length = self.filter_cfg.min_coding_length;
-        let mut window_count = 0;
-        let mut window_length_total = 0;
-
-        let (tx, rx) = channel();
-
-        for (bp_vec, _total_vec, start_pos, _peak) in bp_iter {
-            window_length_total += bp_vec.len();
-
-            let end_pos = start_pos + bp_vec.len();
-            vprintln!("Queuing a window from {} to {} (length: {})", start_pos, end_pos, bp_vec.len());
-
-            let tx = tx.clone();
-            let hmm_cfg = self.hmm_cfg.clone();
-            self.thread_pool.execute(move || {
-                let len = bp_vec.len();
-                let hmm = PredictionHmm::new(bp_vec, hmm_cfg);
-                let maybe_solution = hmm.solve();
-                // Send can only fail if the receiver was dropped; rx lives on the
-                // current thread until the for-loop below drains the channel, so
-                // a failure here is a genuine invariant break.
-                tx.send((window_count, start_pos, end_pos, maybe_solution))
-                    .expect("HMM worker lost its result channel");
-
-                vprintln!("Solved a window from {} to {} (length: {})", start_pos, end_pos, len);
-            });
-
-            window_count += 1;
-        }
-
-        let mut results = Vec::with_capacity(window_count);
-        for _ in 0..window_count {
-            results.push((0, 0, None));
-        }
-
-        for _ in 0..window_count {
-            let (index, start_pos, end_pos, maybe_solution) =
-                rx.recv().expect("HMM worker dropped a window result");
-            results[index] = (start_pos, end_pos, maybe_solution);
-        }
-
-        for (start_pos, end_pos, maybe_solution) in results.into_iter() {
-            let Some(solution) = maybe_solution else {
-                bail!(
-                    "HMM produced no solution for {} window {}-{}",
-                    seq.get_name(),
-                    start_pos,
-                    end_pos
-                );
-            };
-
-            let solution_regions = solution.trace_regions();
-            let genes = HmmStateRegion::split_genes(solution_regions);
-
-            for (gene_regions, coding_length) in genes.iter() {
-                rater.rate_window_regions(
-                    start_pos,
-                    gene_regions,
-                    (*coding_length < min_coding_length) && (*coding_length > 0),
-                );
-            }
-
-            let gff_records = hmm_solution_to_gff(
-                genes,
-                species.get_name(),
-                seq.get_name(),
-                "Helixer",
-                rev,
-                start_pos,
-                seq.get_length(),
-                min_coding_length,
-                gene_idx,
-            );
-            gff_writer
-                .write_records(&gff_records)
-                .with_context(|| format!("writing GFF records for {}", seq.get_name()))?;
-        }
-
-        Ok((window_count, window_length_total))
-    }
-*/
 
     fn process_sequence_1d<W, BPI>(
         &self,
@@ -379,7 +283,7 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
             .calculate_stats(species, seq, false, rating_writer)
             .with_context(|| format!("writing forward rating for {}", seq.get_name()))?;
         if is_verbose() {
-            println!(
+            log_info!(
                 "Rating for Sequence {} - ID {} - Forward",
                 seq.get_name(),
                 id.inner()
@@ -414,7 +318,7 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
             .calculate_stats(species, seq, true, rating_writer)
             .with_context(|| format!("writing reverse rating for {}", seq.get_name()))?;
         if is_verbose() {
-            println!(
+            log_info!(
                 "Rating for Sequence {} - ID {} - Reverse",
                 seq.get_name(),
                 id.inner()

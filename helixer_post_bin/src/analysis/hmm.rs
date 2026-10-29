@@ -1,5 +1,5 @@
 use crate::results::conv::{Bases, ClassPrediction, PhasePrediction};
-use crate::vprintln;
+use crate::{log_info, vprintln};
 use serde::{Deserialize, Serialize};
 use std::cmp::{max, Ordering};
 use std::collections::BinaryHeap;
@@ -178,7 +178,7 @@ pub fn show_hmm_config(cfg: &HmmConfig) {
     let w = &cfg.weights;
     let p = &cfg.donor_fixed_penalty;
 
-    println!("HMM Config");
+    log_info!("HMM Config");
     println!(
         "  Splicing Flags: U:{} US:{} S:{} SC:{} C:{} CS:{} S:{} SU:{} U:{}",
         s.utr5, s.utr5_start, s.start, s.start_coding, s.coding,

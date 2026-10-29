@@ -83,11 +83,15 @@ Positional arguments:
 Common options (run `--help` for the full list):
 
 * `--rating <path>` — per-base rating file (reference vs prediction for each base and strand). Only written when given; it takes roughly 230 bytes per bp of genome (about 30 GB for 135 Mbp). The species-level precision/recall stats are always printed to stdout.
-* `-v, --verbose` — also print per-sequence and per-strand precision/recall stats, one line per sequence and per candidate window, and the decoded HMM regions (debug output, roughly 20 lines per gene). Without it, stdout holds the active config, the species-level stats and a total line with the gene count, and warnings go to stderr.
+* `-v, --verbose` — also print per-sequence and per-strand precision/recall stats, one line per sequence and per candidate window, and the decoded HMM regions (debug output, roughly 20 lines per gene). Without it, stdout holds the active config, the progress lines, the species-level stats and a total line with the gene count and run time, and warnings go to stderr. A progress line (percent of the genome in bp, sequences and genes done, elapsed time and ETA) is printed each time another 5% of the genome is processed, independent of how many sequences the assembly has.
 * `-j, --threads <N>` — HMM worker threads. Defaults to `std::thread::available_parallelism()` (all available ones).
 * `-c, --config <path>` — YAML config file. CLI flags below override the file; the
   file overrides built-in defaults. See `example/default_config.yml` for the full schema.
 * `--print-default-config` — write the built-in defaults to stdout as YAML and exit.
+
+Log lines start with the local time and a level (`I` info, `W` warning, `D` verbose debug output) in the Helixer log
+format, e.g. `2026-10-27 14:27:19, I: Progress: 40% ...`; the rating tables and the HMM config details below their
+header line are printed without a prefix.
 
 Pipeline tuning (also configurable via the YAML file):
 
