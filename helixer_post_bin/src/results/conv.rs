@@ -1,3 +1,4 @@
+use crate::results::iter::BlockElement;
 use hdf5_metno::H5Type;
 use ndarray::ArrayView1;
 
@@ -5,11 +6,11 @@ pub trait ArrayConvFrom<T: Sized + H5Type> {
     fn from(array: ArrayView1<'_, T>) -> Self;
 }
 
-pub trait ArrayConvInto<T>: Sized + H5Type {
+pub trait ArrayConvInto<T>: Sized + BlockElement {
     fn into(array: ArrayView1<'_, Self>) -> T;
 }
 
-impl<T: Sized + H5Type, U> ArrayConvInto<U> for T
+impl<T: Sized + BlockElement, U> ArrayConvInto<U> for T
 where
     U: ArrayConvFrom<T>,
 {

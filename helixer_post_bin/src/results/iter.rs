@@ -1,4 +1,6 @@
 use super::BlockID;
+use half::f16;
+use hdf5_metno::types::{FloatSize, TypeDescriptor};
 use hdf5_metno::{Dataset, H5Type};
 
 use ndarray::{s, Array1, Array2, ArrayView1, Axis};
@@ -125,17 +127,46 @@ impl<'a, T: H5Type + Clone + Copy> Iterator for BlockedDataset1DIter<'a, T> {
     }
 }
 
+/// Element type of a `BlockedDataset2D`, read one block (dataset row) at a time.
+pub trait BlockElement: H5Type + Sized {
+    /// Reads one block; `stored_f16` is set when the dataset is stored as float16.
+    fn read_block(dataset: &Dataset, block_id: BlockID, _stored_f16: bool) -> hdf5_metno::Result<Array2<Self>> {
+        dataset.read_slice_2d(s![block_id.inner(), .., ..])
+    }
+}
+
+impl BlockElement for i8 {}
+
+/// Float16 datasets (Helixer genome and predictions) are read as stored and widened in Rust: the
+/// float16 to float32 conversion of HDF5 1.10 takes about 7x as long as decompression plus widening.
+impl BlockElement for f32 {
+    fn read_block(dataset: &Dataset, block_id: BlockID, stored_f16: bool) -> hdf5_metno::Result<Array2<Self>> {
+        let slice = s![block_id.inner(), .., ..];
+        if stored_f16 {
+            Ok(dataset.read_slice_2d::<f16, _>(slice)?.mapv(f16::to_f32))
+        } else {
+            dataset.read_slice_2d(slice)
+        }
+    }
+}
+
 pub struct BlockedDataset2D<'a, T: ArrayConvInto<O>, O> {
     index: &'a HelixerIndex,
     dataset: Dataset,
+    stored_f16: bool,
     phantom: PhantomData<(T, O)>,
 }
 
 impl<'a, T: ArrayConvInto<O>, O> BlockedDataset2D<'a, T, O> {
     pub fn new(index: &'a HelixerIndex, dataset: Dataset) -> BlockedDataset2D<'a, T, O> {
+        let stored_f16 = matches!(
+            dataset.dtype().and_then(|dtype| dtype.to_descriptor()),
+            Ok(TypeDescriptor::Float(FloatSize::U2))
+        );
         BlockedDataset2D {
             index,
             dataset,
+            stored_f16,
             phantom: PhantomData,
         }
     }
@@ -163,8 +194,7 @@ impl<'a, T: ArrayConvInto<O>, O> BlockedDataset2D<'a, T, O> {
     }
 
     fn get_data_for_block(&self, block_id: BlockID) -> hdf5_metno::Result<Array2<T>> {
-        let slice = s![block_id.inner(), .., ..];
-        self.dataset.read_slice_2d(slice)
+        T::read_block(&self.dataset, block_id, self.stored_f16)
     }
 }
 

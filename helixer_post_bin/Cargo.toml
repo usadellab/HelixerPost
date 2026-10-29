@@ -6,7 +6,8 @@ edition = "2021"
 
 [dependencies]
 #hdf5 = "0.8.1"
-hdf5-metno = "0.9.2"
+hdf5-metno = { version = "0.9.2", features = ["f16"] }
+half = "2.2"
 ndarray = "0.16.1"
 threadpool = "1.0"
 clap = { version = "4", features = ["derive"] }
