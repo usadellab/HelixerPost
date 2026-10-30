@@ -7,7 +7,7 @@ use helixer_post_bin::analysis::{Analyzer, FileConfig};
 use helixer_post_bin::gff::GffWriter;
 use helixer_post_bin::progress::{hms, Progress};
 use helixer_post_bin::results::raw::RawHelixerPredictions;
-use helixer_post_bin::results::HelixerResults;
+use helixer_post_bin::results::{HelixerResults, SequenceID};
 use helixer_post_bin::verbose::{is_verbose, set_verbose};
 use helixer_post_bin::{log_info, vprintln};
 use std::fs::File;
@@ -223,18 +223,28 @@ fn main() -> Result<()> {
         None => RatingWriter::disabled(),
     };
 
-    let (total_seqs, total_bp) = all_species
+    // HDF5 blocks of both strands; every sequence fills at least one block per strand, so the block count
+    // follows the read work of short scaffolds much closer than their length does
+    let block_count = |seq_id: SequenceID| {
+        let (fwd, rev) = helixer_res.get_block_ids_for_sequence(seq_id);
+        (fwd.len() + rev.len()) as u64
+    };
+    let (total_seqs, total_bp, total_blocks) = all_species
         .iter()
         .flat_map(|species| helixer_res.get_sequences_for_species(species.get_id()))
-        .fold((0, 0), |(seqs, bp), seq_id| {
-            (seqs + 1, bp + helixer_res.get_sequence_by_id(*seq_id).get_length())
+        .fold((0, 0, 0), |(seqs, bp, blocks), seq_id| {
+            (
+                seqs + 1,
+                bp + helixer_res.get_sequence_by_id(*seq_id).get_length(),
+                blocks + block_count(*seq_id),
+            )
         });
     log_info!(
         "Processing {} sequences ({:.1} Mbp)",
         total_seqs,
         total_bp as f64 / 1e6
     );
-    let mut progress = Progress::new(total_bp, total_seqs);
+    let mut progress = Progress::new(total_bp, total_seqs, total_blocks);
 
     let mut total_count = 0;
     let mut total_length = 0;
@@ -270,7 +280,7 @@ fn main() -> Result<()> {
             total_count += count;
             total_length += length;
             total_genes += genes;
-            progress.sequence_done(seq.get_length(), genes);
+            progress.sequence_done(seq.get_length(), block_count(*seq_id), genes);
         }
 
         if is_verbose() {

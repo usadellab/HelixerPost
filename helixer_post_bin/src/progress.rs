@@ -2,6 +2,9 @@
 //!
 //! Base pairs rather than sequences keep the number of lines independent of assembly
 //! fragmentation: a genome in 50,000 scaffolds gets as many lines as one in 5 chromosomes.
+//! The ETA averages two extrapolations, one from processed bp and one from processed HDF5 blocks:
+//! every sequence fills at least one block per strand, so short scaffolds, usually at the end of an
+//! assembly, cost far more time than their share of the bp, but less than their share of the blocks.
 
 use crate::log_info;
 use std::time::{Duration, Instant};
@@ -9,35 +12,40 @@ use std::time::{Duration, Instant};
 /// Percent of the total bp between two progress lines (at most 20 lines per run).
 const PROGRESS_STEP: u64 = 5;
 
-/// Counts processed sequences, base pairs and genes, and prints a progress line each time
+/// Counts processed sequences, base pairs, blocks and genes, and prints a progress line each time
 /// another `PROGRESS_STEP` percent of the genome is done.
 pub struct Progress {
     total_bp: u64,
     total_seqs: usize,
+    total_blocks: u64,
     start: Instant,
     next_percent: u64,
     done_bp: u64,
     done_seqs: usize,
+    done_blocks: u64,
     genes: usize,
 }
 
 impl Progress {
-    pub fn new(total_bp: u64, total_seqs: usize) -> Self {
+    pub fn new(total_bp: u64, total_seqs: usize, total_blocks: u64) -> Self {
         Self {
             total_bp,
             total_seqs,
+            total_blocks,
             start: Instant::now(),
             next_percent: PROGRESS_STEP,
             done_bp: 0,
             done_seqs: 0,
+            done_blocks: 0,
             genes: 0,
         }
     }
 
     /// Records one finished sequence and prints a progress line if it crossed a milestone.
-    pub fn sequence_done(&mut self, length: u64, genes: usize) {
+    pub fn sequence_done(&mut self, length: u64, blocks: u64, genes: usize) {
         self.done_bp += length;
         self.done_seqs += 1;
+        self.done_blocks += blocks;
         self.genes += genes;
 
         let percent = self.done_bp * 100 / self.total_bp.max(1);
@@ -49,9 +57,10 @@ impl Progress {
 
     fn print(&self, percent: u64) {
         let elapsed = self.start.elapsed();
-        let eta = if self.done_bp < self.total_bp {
-            let remaining = (self.total_bp - self.done_bp) as f64 / self.done_bp as f64;
-            format!(", ETA {}", hms(elapsed.mul_f64(remaining)))
+        let eta = if self.done_blocks < self.total_blocks {
+            let remaining_bp = (self.total_bp - self.done_bp) as f64 / self.done_bp as f64;
+            let remaining_blocks = (self.total_blocks - self.done_blocks) as f64 / self.done_blocks as f64;
+            format!(", ETA {}", hms(elapsed.mul_f64((remaining_bp + remaining_blocks) / 2.0)))
         } else {
             String::new()
         };
