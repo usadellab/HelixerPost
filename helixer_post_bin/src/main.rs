@@ -56,6 +56,12 @@ struct Cli {
     #[arg(long, short = 'j')]
     threads: Option<usize>,
 
+    /// Cap on the total length in Mbp of the candidate windows queued or being decoded at a time. The HMM memory
+    /// grows with the window length, so the cap bounds the peak memory on genomes with many long windows; a single
+    /// window longer than the cap is still decoded, alone. Does not change the output. PS: poor lonely window :(
+    #[arg(long, default_value_t = 4.0)]
+    max_in_flight_mbp: f64,
+
     /// Sliding-window width in bases (pass 1).
     #[arg(long)]
     window_size: Option<usize>,
@@ -162,6 +168,10 @@ fn main() -> Result<()> {
         cli.min_intron_length_u12,
     );
     let thread_count = cli.threads.unwrap_or_else(default_threads);
+    if cli.max_in_flight_mbp.is_nan() || cli.max_in_flight_mbp <= 0.0 {
+        bail!("--max-in-flight-mbp must be positive, got {}", cli.max_in_flight_mbp);
+    }
+    let max_in_flight_bp = (cli.max_in_flight_mbp * 1e6) as usize;
 
     let helixer_res = HelixerResults::new(&predictions_path, &genome_path)
         .context("opening Helixer prediction / genome HDF5 inputs")?;
@@ -180,16 +190,19 @@ fn main() -> Result<()> {
         filter_cfg,
         hmm_cfg,
         thread_count,
+        max_in_flight_bp,
     );
 
     show_hmm_config(&hmm_cfg);
     log_info!(
-        "Pipeline config: window_size={} edge_threshold={} peak_threshold={} min_coding_length={} threads={}",
+        "Pipeline config: window_size={} edge_threshold={} peak_threshold={} min_coding_length={} threads={} \
+         max_in_flight_mbp={}",
         window_cfg.window_size,
         window_cfg.edge_threshold,
         window_cfg.peak_threshold,
         filter_cfg.min_coding_length,
         thread_count,
+        cli.max_in_flight_mbp,
     );
 
     let gff_file = File::create(&gff_path)

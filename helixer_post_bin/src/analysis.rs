@@ -114,6 +114,8 @@ pub struct Analyzer<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<Ph
     filter_cfg: FilterConfig,
     hmm_cfg: HmmConfig,
     thread_pool: ThreadPool,
+    /// Cap on the bp of the windows queued or being decoded at a time
+    max_in_flight_bp: usize,
 }
 
 impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
@@ -126,6 +128,7 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
         filter_cfg: FilterConfig,
         hmm_cfg: HmmConfig,
         thread_count: usize,
+        max_in_flight_bp: usize,
     ) -> Analyzer<'a, TC, TP> {
         let thread_pool = ThreadPool::new(thread_count);
 
@@ -136,6 +139,7 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
             filter_cfg,
             hmm_cfg,
             thread_pool,
+            max_in_flight_bp,
         }
     }
 
@@ -146,8 +150,9 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
     /// Decodes the windows of all `seqs` on the worker pool and finalises the strands into `sink` in input order,
     /// forward before reverse strand. Strands are not decoded one after the other: while the windows of one strand
     /// are being decoded, the windows of the following strands are queued as well, at most
-    /// `WINDOWS_IN_FLIGHT_PER_THREAD` per thread. A strand is finalised once all of its windows and those of all
-    /// earlier strands are decoded, so the output does not depend on the order in which the workers finish.
+    /// `WINDOWS_IN_FLIGHT_PER_THREAD` per thread and `max_in_flight_bp` bp in total. A strand is finalised once all
+    /// of its windows and those of all earlier strands are decoded, so the output does not depend on the order
+    /// in which the workers finish.
     pub fn process_sequences<GW: Write, RW: Write>(
         &self,
         species: &Species,
@@ -158,6 +163,8 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
         let (tx, rx) = channel();
         let mut pending = PendingStrands::default();
         let mut in_flight = 0;
+        let mut in_flight_bp = 0;
+        let mut peak_in_flight_bp = 0;
 
         for seq in seqs {
             vprintln!(
@@ -178,8 +185,11 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
                 .with_context(|| format!("{} base-prediction iterator failed to initialise", strand_name(rev)))?;
 
                 for (bp_vec, _total_vec, start_pos, _peak) in bp_iter {
-                    while in_flight >= max_in_flight {
-                        self.receive_window(&rx, species, &mut pending, sink)?;
+                    // a window longer than the bp cap is queued once nothing else is in flight
+                    while in_flight >= max_in_flight
+                        || (in_flight > 0 && in_flight_bp + bp_vec.len() > self.max_in_flight_bp)
+                    {
+                        in_flight_bp -= self.receive_window(&rx, species, &mut pending, sink)?;
                         in_flight -= 1;
                     }
 
@@ -187,6 +197,8 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
                     vprintln!("Queuing a window from {} to {} (length: {})", start_pos, end_pos, bp_vec.len());
                     let window_idx = pending.add_window(strand_idx);
                     in_flight += 1;
+                    in_flight_bp += bp_vec.len();
+                    peak_in_flight_bp = peak_in_flight_bp.max(in_flight_bp);
 
                     let tx = tx.clone();
                     let hmm_cfg = self.hmm_cfg.clone();
@@ -206,23 +218,27 @@ impl<'a, TC: ArrayConvInto<ClassPrediction>, TP: ArrayConvInto<PhasePrediction>>
         }
 
         while in_flight > 0 {
-            self.receive_window(&rx, species, &mut pending, sink)?;
+            in_flight_bp -= self.receive_window(&rx, species, &mut pending, sink)?;
             in_flight -= 1;
         }
+        vprintln!("Peak bp of windows in flight: {}", peak_in_flight_bp);
         Ok(())
     }
 
-    /// Waits for the next decoded window, stores it and finalises the strands it completes.
+    /// Waits for the next decoded window, stores it and finalises the strands it completes. Returns the length of
+    /// the window in bp.
     fn receive_window<GW: Write, RW: Write>(
         &self,
         rx: &Receiver<WindowMessage>,
         species: &Species,
         pending: &mut PendingStrands<'_>,
         sink: &mut Sink<'_, GW, RW>,
-    ) -> Result<()> {
+    ) -> Result<usize> {
         let (strand_idx, window_idx, window) = rx.recv().expect("HMM worker dropped a window result");
+        let len = window.end_pos - window.start_pos;
         pending.store(strand_idx, window_idx, window);
-        self.finalize_ready(species, pending, sink)
+        self.finalize_ready(species, pending, sink)?;
+        Ok(len)
     }
 
     /// Finalises the leading strands whose windows are all queued and decoded.
