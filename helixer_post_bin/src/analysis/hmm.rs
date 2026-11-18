@@ -1748,6 +1748,10 @@ pub struct PredictionHmm {
 
     eval_heap: BinaryHeap<HeapKey>,
 
+    // Intron penalty per base in one contiguous array, so that the multi-base intron entry states (minimum intron
+    // length) are scored without a get_state_penalty call and a PredPenalty lookup per base
+    intron_pen: Vec<f64>,
+
     // Successor buffer reused for every expanded eval instead of one allocation each
     successors: Vec<(HmmState, f64)>,
 }
@@ -1779,6 +1783,8 @@ impl PredictionHmm {
             bases_pen.push(BasesPenalty::new(bases, prob_floor));
         }
 
+        let intron_pen = pred_pen.iter().map(|pen| pen.get_intron_penalty()).collect();
+
         let total_states = (bp_vector.len() + 1) * HMM_STATES;
         let best_eval = vec![None; total_states];
 
@@ -1791,6 +1797,7 @@ impl PredictionHmm {
             bases_pen,
             best_eval,
             eval_heap,
+            intron_pen,
             successors: Vec::with_capacity(HMM_STATES),
         }
     }
@@ -1853,11 +1860,19 @@ impl PredictionHmm {
             if end_position <= self.class_pred_pen.len()
             // Drop 'long' state picked near end
             {
-                for pos in start_position..end_position {
+                if end_position - start_position > 1 {
+                    // only the intron entry (DSS) states span several bases (get_base_count), and intron states
+                    // are scored with the intron penalty of every base (get_state_penalty). Added one by one in the
+                    // same order as before, so the f64 sum is bit-identical (prefix sums would not be).
+                    debug_assert!(next_state.get_component_states().1 != HmmIntronState::None);
+                    for pen in &self.intron_pen[start_position..end_position] {
+                        local_penalty += pen;
+                    }
+                } else {
                     let (_, pen) = next_state.get_state_penalty(
-                        &self.class_pred_pen[pos],
-                        &self.phase_pred_pen[pos],
-                        &self.pred_pen[pos],
+                        &self.class_pred_pen[start_position],
+                        &self.phase_pred_pen[start_position],
+                        &self.pred_pen[start_position],
                     );
                     local_penalty += pen;
                 }
