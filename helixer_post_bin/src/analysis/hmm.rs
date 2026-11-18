@@ -1654,10 +1654,12 @@ impl HmmState {
 
 const PENALTY_SCALE: f64 = 1_000_000.0; // Convert to u64 to avoid FP annoyances
 
+// One entry per window position and state in `best_eval`, so its size sets the HMM memory (HMM_STATES entries per bp).
+// Positions are u32 (windows up to u32::MAX bp, checked in PredictionHmm::new) to keep an entry at 24 bytes.
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct HmmEval {
-    start_position: usize, // Number of bases produced before this state
-    end_position: usize,   // Number of bases produced including this state
+    start_position: u32, // Number of bases produced before this state
+    end_position: u32,   // Number of bases produced including this state
     state: HmmState,
     previous_state: HmmState,
 
@@ -1682,15 +1684,27 @@ impl HmmEval {
         previous_state: HmmState,
         accum_penalty: u64,
     ) -> HmmEval {
+        // Cannot fail: successors end within the window (process_eval) and PredictionHmm::new rejects windows longer
+        // than u32::MAX bp. Checked anyway, so a later change cannot silently truncate a position.
         HmmEval {
-            start_position,
-            end_position,
+            start_position: u32::try_from(start_position).expect("HMM start position exceeds u32"),
+            end_position: u32::try_from(end_position).expect("HMM end position exceeds u32"),
             state,
             previous_state,
             accum_penalty,
         }
     }
+
+    fn start(&self) -> usize {
+        self.start_position as usize
+    }
+
+    fn end(&self) -> usize {
+        self.end_position as usize
+    }
 }
+
+const _: () = assert!(std::mem::size_of::<Option<HmmEval>>() == 24);
 
 impl Ord for HmmEval {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -1729,6 +1743,11 @@ impl PredictionHmm {
         bp_vector: Vec<(Bases, ClassPrediction, PhasePrediction)>,
         cfg: HmmConfig,
     ) -> PredictionHmm {
+        assert!(
+            u32::try_from(bp_vector.len()).is_ok(),
+            "window of {} bp exceeds the u32 positions of the HMM",
+            bp_vector.len()
+        );
         let prob_floor = cfg.prob_floor;
         let phase_retain = cfg.phase_retain;
 
@@ -1762,7 +1781,7 @@ impl PredictionHmm {
     }
 
     fn consider_eval(&mut self, eval: HmmEval) {
-        let idx = eval.end_position * HMM_STATES + (eval.state as usize);
+        let idx = eval.end() * HMM_STATES + (eval.state as usize);
 
         let maybe_old_eval = &self.best_eval[idx];
 
@@ -1777,7 +1796,7 @@ impl PredictionHmm {
     }
 
     fn is_eval_current(&self, eval: &HmmEval) -> bool {
-        let idx = eval.end_position * HMM_STATES + (eval.state as usize);
+        let idx = eval.end() * HMM_STATES + (eval.state as usize);
         let best_eval = &self.best_eval[idx].expect("Eval from heap not in best_eval");
 
         best_eval == eval
@@ -1794,7 +1813,7 @@ impl PredictionHmm {
             &self.phase_pred_pen,
             &self.pred_pen,
             &self.bases_pen,
-            eval.end_position,
+            eval.end(),
         );
 
         let mil = self.cfg.minimum_intron_lengths.clone();
@@ -1806,7 +1825,7 @@ impl PredictionHmm {
         for (next_state, trans_penalty) in successors.into_iter() {
             let mut local_penalty = trans_penalty;
 
-            let start_position = eval.end_position;
+            let start_position = eval.end();
             let end_position = start_position + next_state.get_base_count(&mil);
 
             if end_position <= self.class_pred_pen.len()
@@ -1844,7 +1863,7 @@ impl PredictionHmm {
 
         while evals < MAX_EVALS {
             if let Some(eval) = self.eval_heap.pop() {
-                if eval.end_position == self.class_pred_pen.len() {
+                if eval.end() == self.class_pred_pen.len() {
                     return Some(PredictionHmmSolution::new(self, eval));
                 }
 
@@ -1937,7 +1956,7 @@ impl PredictionHmmSolution {
         let mut regions = Vec::new();
 
         let mut eval = &self.eval;
-        let mut region_end_pos = eval.end_position;
+        let mut region_end_pos = eval.end();
 
         // State positions are inclusive start, exclusive end: state.start_pos = 0, state.end_pos = 1 is the first real state (almost always)
         // A 'dummy root' state exists at the start with start_pos = 0, end_pos = 0, with intergenic state
@@ -1947,17 +1966,17 @@ impl PredictionHmmSolution {
             // A region ends where the annotation label changes
             if eval.state.get_annotation_label() != eval.previous_state.get_annotation_label() {
                 vprintln!("Generate a standard HmmStateRegion S: {} E: {} Label: {}",
-                         eval.start_position, region_end_pos, eval.state.get_annotation_label().to_str());
+                         eval.start(), region_end_pos, eval.state.get_annotation_label().to_str());
 
                 regions.push(HmmStateRegion::new(
-                    eval.start_position,
+                    eval.start(),
                     region_end_pos,
                     eval.state.get_annotation_label(),
                 ));
-                region_end_pos = eval.start_position; // Equivalent to previous_state.end_position
+                region_end_pos = eval.start(); // Equivalent to previous_state.end_position
             }
 
-            let prev_position = eval.start_position;
+            let prev_position = eval.start();
             let idx = prev_position * HMM_STATES + (eval.previous_state as usize);
 
             eval = self.hmm.best_eval.get(idx).unwrap().as_ref().unwrap();
@@ -1969,7 +1988,7 @@ impl PredictionHmmSolution {
                      0, region_end_pos, eval.state.get_annotation_label().to_str());
 
             regions.push(HmmStateRegion::new(
-                eval.start_position,
+                eval.start(),
                 region_end_pos,
                 eval.state.get_annotation_label(),
             ));
