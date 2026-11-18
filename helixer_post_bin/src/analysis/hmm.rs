@@ -1747,6 +1747,9 @@ pub struct PredictionHmm {
     best_eval: Vec<Option<HmmEval>>,
 
     eval_heap: BinaryHeap<HeapKey>,
+
+    // Successor buffer reused for every expanded eval instead of one allocation each
+    successors: Vec<(HmmState, f64)>,
 }
 
 impl PredictionHmm {
@@ -1788,6 +1791,7 @@ impl PredictionHmm {
             bases_pen,
             best_eval,
             eval_heap,
+            successors: Vec::with_capacity(HMM_STATES),
         }
     }
 
@@ -1834,11 +1838,13 @@ impl PredictionHmm {
 
         let mil = self.cfg.minimum_intron_lengths.clone();
 
-        let mut successors = Vec::with_capacity(HMM_STATES);
+        // taken out of self for the loop, as consider_eval borrows self mutably
+        let mut successors = std::mem::take(&mut self.successors);
+        successors.clear();
         eval.state
             .populate_successor_states_and_transition_penalties(&trans_ctx, &mut successors);
 
-        for (next_state, trans_penalty) in successors.into_iter() {
+        for &(next_state, trans_penalty) in successors.iter() {
             let mut local_penalty = trans_penalty;
 
             let start_position = eval.end();
@@ -1869,6 +1875,7 @@ impl PredictionHmm {
                 self.consider_eval(next_eval);
             }
         }
+        self.successors = successors;
     }
 
     pub fn solve(mut self) -> Option<PredictionHmmSolution> {
