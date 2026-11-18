@@ -3,7 +3,7 @@ use clap::Parser;
 use helixer_post_bin::analysis::extractor::{BasePredictionExtractor, ComparisonExtractor};
 use helixer_post_bin::analysis::hmm::show_hmm_config;
 use helixer_post_bin::analysis::rater::{RatingWriter, SequenceRating};
-use helixer_post_bin::analysis::{Analyzer, FileConfig};
+use helixer_post_bin::analysis::{Analyzer, FileConfig, Sink};
 use helixer_post_bin::gff::GffWriter;
 use helixer_post_bin::progress::{hms, Progress};
 use helixer_post_bin::results::raw::RawHelixerPredictions;
@@ -245,6 +245,13 @@ fn main() -> Result<()> {
         total_bp as f64 / 1e6
     );
     let mut progress = Progress::new(total_bp, total_seqs, total_blocks);
+    // indexed by sequence ID, which counts the sequences of all species
+    let mut block_counts = vec![0; total_seqs];
+    for species in all_species {
+        for seq_id in helixer_res.get_sequences_for_species(species.get_id()) {
+            block_counts[seq_id.inner()] = block_count(*seq_id);
+        }
+    }
 
     let mut total_count = 0;
     let mut total_length = 0;
@@ -260,28 +267,23 @@ fn main() -> Result<()> {
             species.get_name(),
             id.inner()
         );
-        for seq_id in helixer_res.get_sequences_for_species(id) {
-            let seq = helixer_res.get_sequence_by_id(*seq_id);
-            gff_writer
-                .write_region_header(seq.get_name(), seq.get_length())
-                .with_context(|| {
-                    format!("writing sequence-region header for {}", seq.get_name())
-                })?;
-
-            let (count, length, genes) = analyzer.process_sequence(
-                species,
-                seq,
-                &mut fwd_species_rating,
-                &mut rev_species_rating,
-                &mut gff_writer,
-                &mut rating_writer,
-            )?;
-
-            total_count += count;
-            total_length += length;
-            total_genes += genes;
-            progress.sequence_done(seq.get_length(), block_count(*seq_id), genes);
-        }
+        let mut sink = Sink::new(
+            &mut gff_writer,
+            &mut rating_writer,
+            &mut fwd_species_rating,
+            &mut rev_species_rating,
+            &mut progress,
+            &block_counts,
+        );
+        let seqs: Vec<_> = helixer_res
+            .get_sequences_for_species(id)
+            .iter()
+            .map(|seq_id| helixer_res.get_sequence_by_id(*seq_id))
+            .collect();
+        analyzer.process_sequences(species, &seqs, &mut sink)?;
+        total_count += sink.windows;
+        total_length += sink.bp;
+        total_genes += sink.genes;
 
         if is_verbose() {
             log_info!(
