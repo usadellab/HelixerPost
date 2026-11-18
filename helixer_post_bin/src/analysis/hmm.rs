@@ -1706,18 +1706,29 @@ impl HmmEval {
 
 const _: () = assert!(std::mem::size_of::<Option<HmmEval>>() == 24);
 
-impl Ord for HmmEval {
+/// Priority-queue entry of the best-first search, 16 instead of 24 bytes to move per heap operation. The full HmmEval
+/// stays in `best_eval`. An entry is current while its penalty equals the stored one, as `consider_eval` only replaces
+/// an eval by one with a strictly lower penalty.
+#[derive(Copy, Clone, PartialEq, Eq)]
+struct HeapKey {
+    accum_penalty: u64,
+    end_position: u32,
+    state: HmmState,
+}
+
+impl Ord for HeapKey {
     fn cmp(&self, other: &Self) -> Ordering {
         // Order on penalty (lowest), then position (highest)
         other
             .accum_penalty
             .cmp(&self.accum_penalty)
             .then_with(|| self.end_position.cmp(&other.end_position))
-        //.then_with(|| self.state.cmp(&other.state))
     }
 }
 
-impl PartialOrd for HmmEval {
+const _: () = assert!(std::mem::size_of::<HeapKey>() == 16);
+
+impl PartialOrd for HeapKey {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
@@ -1735,7 +1746,7 @@ pub struct PredictionHmm {
 
     best_eval: Vec<Option<HmmEval>>,
 
-    eval_heap: BinaryHeap<HmmEval>,
+    eval_heap: BinaryHeap<HeapKey>,
 }
 
 impl PredictionHmm {
@@ -1792,20 +1803,25 @@ impl PredictionHmm {
         }
 
         self.best_eval[idx] = Some(eval);
-        self.eval_heap.push(eval);
+        self.eval_heap.push(HeapKey {
+            accum_penalty: eval.accum_penalty,
+            end_position: eval.end_position,
+            state: eval.state,
+        });
     }
 
-    fn is_eval_current(&self, eval: &HmmEval) -> bool {
-        let idx = eval.end() * HMM_STATES + (eval.state as usize);
-        let best_eval = &self.best_eval[idx].expect("Eval from heap not in best_eval");
+    /// The eval of a heap entry, None if a cheaper eval for the same position and state replaced it.
+    fn current_eval(&self, key: &HeapKey) -> Option<HmmEval> {
+        let idx = key.end_position as usize * HMM_STATES + (key.state as usize);
+        let best_eval = self.best_eval[idx].expect("Eval from heap not in best_eval");
 
-        best_eval == eval
+        (best_eval.accum_penalty == key.accum_penalty).then_some(best_eval)
     }
 
-    fn process_eval(&mut self, eval: &HmmEval) {
-        if !self.is_eval_current(eval) {
+    fn process_eval(&mut self, key: &HeapKey) {
+        let Some(eval) = self.current_eval(key) else {
             return;
-        }
+        };
 
         let trans_ctx = TransitionContext::new(
             &self.cfg,
@@ -1862,12 +1878,14 @@ impl PredictionHmm {
         let mut evals = 0;
 
         while evals < MAX_EVALS {
-            if let Some(eval) = self.eval_heap.pop() {
-                if eval.end() == self.class_pred_pen.len() {
+            if let Some(key) = self.eval_heap.pop() {
+                if key.end_position as usize == self.class_pred_pen.len() {
+                    // a replaced entry has a higher penalty than its replacement, so it cannot be popped first
+                    let eval = self.current_eval(&key).expect("final eval superseded");
                     return Some(PredictionHmmSolution::new(self, eval));
                 }
 
-                self.process_eval(&eval);
+                self.process_eval(&key);
             } else {
                 break;
             } // Nothing left to do
