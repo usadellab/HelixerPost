@@ -1,8 +1,9 @@
 //! End-to-end tests running the binary on the bundled `example/` data.
 //!
 //! The example data is not curated enough to serve as a reference annotation, so these tests
-//! compare runs against each other (config round trip, CLI precedence) or check properties of the
-//! output (minimum intron length) instead of comparing against committed expected output.
+//! compare runs against each other (config round trip, CLI precedence, thread count and in-flight cap)
+//! or check properties of the output (minimum intron length) instead of comparing against committed
+//! expected output.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -19,14 +20,22 @@ fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_helixer_post_bin")
 }
 
-/// Runs helixer_post_bin on the example data with the given extra arguments and returns the GFF.
-fn run(args: &[&str]) -> String {
+/// Runs helixer_post_bin on the example data with the given extra arguments (`--threads 1` unless
+/// given) and returns the GFF, the per-base rating file (only written with `rating`) and stdout.
+fn run_all(args: &[&str], rating: bool) -> (String, Option<String>, String) {
     let tmp = tempdir().expect("tempdir");
     let gff = tmp.path().join("out.gff");
+    let rating_path = tmp.path().join("rating.tsv");
     let example = example_dir();
 
-    let output = Command::new(bin())
-        .args(["--threads", "1"])
+    let mut cmd = Command::new(bin());
+    if !args.contains(&"--threads") {
+        cmd.args(["--threads", "1"]);
+    }
+    if rating {
+        cmd.arg("--rating").arg(&rating_path);
+    }
+    let output = cmd
         .args(args)
         .arg(example.join("genome_data.h5"))
         .arg(example.join("predictions.h5"))
@@ -39,7 +48,47 @@ fn run(args: &[&str]) -> String {
         output.status,
         String::from_utf8_lossy(&output.stderr),
     );
-    std::fs::read_to_string(&gff).expect("reading GFF output")
+    (
+        std::fs::read_to_string(&gff).expect("reading GFF output"),
+        rating.then(|| std::fs::read_to_string(&rating_path).expect("reading rating output")),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+    )
+}
+
+/// Runs helixer_post_bin on the example data with the given extra arguments and returns the GFF.
+fn run(args: &[&str]) -> String {
+    run_all(args, false).0
+}
+
+/// Settings that split the example into 20 candidate windows on both strands instead of 1, so that
+/// several windows are decoded at the same time and can finish out of order, and that loosen the HMM
+/// (no start/stop codon penalty, high probability floor, no coding length filter) so that several of
+/// them yield a gene in the GFF instead of 1 in total.
+const MANY_WINDOWS: [&str; 14] = [
+    "--window-size", "1",
+    "--edge-threshold", "0.1",
+    "--peak-threshold", "0.2",
+    "--hmm-start-weight", "0",
+    "--hmm-stop-weight", "0",
+    "--hmm-prob-floor", "0.3",
+    "--min-coding-length", "0",
+];
+
+fn gene_count(gff: &str) -> usize {
+    gff.lines().filter(|l| l.split('\t').nth(2) == Some("gene")).count()
+}
+
+/// Returns the decoded window bp and window count from the `Total:` line of stdout
+/// (`Total: <genes> genes, <bp>bp across <windows> windows in <time>`).
+fn window_totals(stdout: &str) -> (usize, usize) {
+    let total = stdout
+        .lines()
+        .find_map(|l| l.split_once("Total: ").map(|(_, rest)| rest))
+        .expect("no Total: line in stdout");
+    let words: Vec<&str> = total.split_whitespace().collect();
+    let bp = words[2].trim_end_matches("bp").parse().expect("window bp");
+    let windows = words[4].parse().expect("window count");
+    (bp, windows)
 }
 
 /// Returns the lengths of all introns in a GFF, i.e. the gaps between consecutive exons of each
@@ -110,4 +159,32 @@ fn min_intron_length_is_enforced() {
         lengths.iter().all(|&l| l >= min_length),
         "introns shorter than --min-intron-length {min_length}: {lengths:?}"
     );
+}
+
+#[test]
+fn thread_count_does_not_change_output() {
+    let (gff, rating, stdout) = run_all(&MANY_WINDOWS, true);
+    let (_, windows) = window_totals(&stdout);
+    assert!(windows > 4, "precondition: more windows ({windows}) than threads (4)");
+    assert!(gene_count(&gff) > 1, "precondition: several genes in the GFF");
+
+    let (gff_4, rating_4, _) = run_all(&[&MANY_WINDOWS[..], &["--threads", "4"]].concat(), true);
+    assert_eq!(gff_4, gff, "--threads 4 changed the GFF");
+    assert_eq!(rating_4, rating, "--threads 4 changed the rating");
+}
+
+#[test]
+fn max_in_flight_mbp_does_not_change_output() {
+    let args = [&MANY_WINDOWS[..], &["--threads", "4"]].concat();
+    let (gff, rating, stdout) = run_all(&args, true);
+    let (bp, _) = window_totals(&stdout);
+    assert!(bp > 2_000, "precondition: the windows ({bp} bp) exceed the 0.002 Mbp cap");
+    assert!(gene_count(&gff) > 1, "precondition: several genes in the GFF");
+
+    // 1 bp: one window at a time; 0.002 Mbp: some windows wait for others to finish
+    for cap in ["0.000001", "0.002"] {
+        let (gff_cap, rating_cap, _) = run_all(&[&args[..], &["--max-in-flight-mbp", cap]].concat(), true);
+        assert_eq!(gff_cap, gff, "--max-in-flight-mbp {cap} changed the GFF");
+        assert_eq!(rating_cap, rating, "--max-in-flight-mbp {cap} changed the rating");
+    }
 }

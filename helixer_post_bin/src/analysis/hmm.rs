@@ -155,19 +155,31 @@ impl Default for HmmWeights {
         Self {
             start: 1_000.0,
             stop: 1_000.0,
-            donor: 1.0,
-            acceptor: 1.0,
+            donor: 2.0,
+            acceptor: 2.0,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+/// Fixed penalty added to every donor (intron entry) of the class. Together with the donor and acceptor weights 2 it
+/// suppresses most of the 1 to 2 bp internal CDS pieces that the decoder otherwise inserts between two introns.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DonorFixedPenalties {
     pub u2_gt_ag: f64,
     pub u2_gc_ag: f64,
 //    pub u12_gt_ag: f64, // Not currently considered a unique intron class
     pub u12_at_ac: f64,
+}
+
+impl Default for DonorFixedPenalties {
+    fn default() -> Self {
+        Self {
+            u2_gt_ag: 20.0,
+            u2_gc_ag: 20.0,
+            u12_at_ac: 20.0,
+        }
+    }
 }
 
 

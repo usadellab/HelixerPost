@@ -28,11 +28,11 @@ hmm:
   weights:
     start: 1000.0
     stop: 1000.0
-    donor: 1.0
-    acceptor: 1.0
+    donor: 2.0
+    acceptor: 2.0
   donor_fixed_penalty:
-    u2_gt_ag: 0.0
-    u2_gc_ag: 0.0
-    u12_at_ac: 0.0
+    u2_gt_ag: 20.0
+    u2_gc_ag: 20.0
+    u12_at_ac: 20.0
 filter:
   min_coding_length: 60

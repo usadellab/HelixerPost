@@ -105,11 +105,11 @@ Pipeline tuning (also configurable via the YAML file):
 * `--hmm-prob-floor <f>` — minimum probability used before negative-log conversion (default `1e-9`).
 * `--hmm-phase-retain <f>` — weight given to the predicted phase signal (default `0.20`).
 * `--hmm-start-weight <f>` / `--hmm-stop-weight <f>` — multiplicative weights on the start / stop codon base-match penalties (default `1000`).
-* `--hmm-donor-weight <f>` / `--hmm-acceptor-weight <f>` — multiplicative weights on splice donor / acceptor base-match penalties (default `1.0`).
+* `--hmm-donor-weight <f>` / `--hmm-acceptor-weight <f>` — multiplicative weights on splice donor / acceptor base-match penalties (default `2.0`).
 
 The minimum intron lengths can also be set per intron class in the config file (`hmm.minimum_intron_lengths`).
-The HMM splice-flag booleans and per-donor fixed penalties are config-file-only
-(they appear in `example/default_config.yml` and `--print-default-config`).
+The HMM splice-flag booleans and per-donor fixed penalties (`hmm.donor_fixed_penalty`, default `20.0` for each intron
+class) are config-file-only (they appear in `example/default_config.yml` and `--print-default-config`).
 
 ## Example Usage
 
