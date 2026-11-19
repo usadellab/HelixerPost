@@ -209,6 +209,32 @@ fn convert_regions_to_gff(
     region_vec
 }
 
+/// Marks the records of a gene cut off at its 3' end (gene record first, final strand and coordinates) in the
+/// NCBI form. `partial=true` goes on every incomplete feature: all but the 5' UTR, which is complete as every
+/// decode starts intergenic, and the CDS only if the cut lies before the stop codon. The open 3' end
+/// (`end_range` / `start_range`) goes on the gene, the mRNA and the features ending at the cut; if the decode
+/// ends in an intron, the last exon ends at a splice site and only gene and mRNA get it.
+fn mark_cut_off_gene(recs: &mut [GffRecord], ends_in_intron: bool, cds_complete: bool) {
+    let gene_end = recs[0].get_three_prime_end();
+    for rec in recs.iter_mut() {
+        let partial = match rec.get_feature() {
+            GffFeature::FivePrimeUTR => false,
+            GffFeature::CDS => !cds_complete,
+            _ => true,
+        };
+        let open = match rec.get_feature() {
+            GffFeature::Gene | GffFeature::MRNA => true,
+            _ => partial && !ends_in_intron && rec.get_three_prime_end() == gene_end,
+        };
+        if partial {
+            rec.mark_partial();
+        }
+        if open {
+            rec.mark_open_three_prime_end();
+        }
+    }
+}
+
 pub fn hmm_solution_to_gff(
     genes: Vec<(Vec<HmmStateRegion>, usize)>,
     species: &str,
@@ -227,8 +253,18 @@ pub fn hmm_solution_to_gff(
 
     let strand = Some(GffStrand::Forward); // Initially generate everything as forward
 
-    for (gene_regions, coding_length) in genes {
+    let gene_count = genes.len();
+    for (idx, (gene_regions, coding_length)) in genes.into_iter().enumerate() {
         if coding_length >= min_coding_length {
+            // The decode starts intergenic but may end in any state, so the last gene of a window is cut off
+            // at its 3' end if the window ends in a genic state. Earlier genes end before an intergenic region,
+            // which split_genes puts at the start of the following gene.
+            let last_label = gene_regions.last().map(|region| region.get_annotation_label());
+            let cut_off = idx + 1 == gene_count && last_label.is_some_and(|l| l != HmmAnnotationLabel::Intergenic);
+            // the stop codon was decoded if the gene reached its 3' UTR
+            let cds_complete = gene_regions
+                .iter()
+                .any(|region| region.get_annotation_label() == HmmAnnotationLabel::UTR3);
             let gene_name = format!("{}_{}_{:06}", species, sequence, *gene_idx);
             let gene_gff_recs = convert_regions_to_gff(
                 gene_regions,
@@ -238,17 +274,19 @@ pub fn hmm_solution_to_gff(
                 position,
                 &gene_name,
             );
-            let gene_gff_recs =
+            let mut gene_gff_recs =
                 generate_gff_aggregate_records(gene_gff_recs, sequence, source, strand, &gene_name);
+            if rev {
+                for rec in gene_gff_recs.iter_mut() {
+                    rec.swap_strand(sequence_length);
+                }
+            }
+            if cut_off {
+                mark_cut_off_gene(&mut gene_gff_recs, last_label == Some(HmmAnnotationLabel::Intron), cds_complete);
+            }
 
             all_gff_recs.extend(gene_gff_recs);
             *gene_idx += 1;
-        }
-    }
-
-    if rev {
-        for gff_recs in all_gff_recs.iter_mut() {
-            gff_recs.swap_strand(sequence_length);
         }
     }
 

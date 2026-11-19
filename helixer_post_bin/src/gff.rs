@@ -182,6 +182,30 @@ impl GffRecord {
     pub fn get_attributes(&self) -> &String {
         &self.attributes
     }
+
+    pub fn get_feature(&self) -> GffFeature {
+        self.feature
+    }
+
+    /// Returns the coordinate of the 3' end: the end on the forward strand, the start on the reverse strand.
+    pub fn get_three_prime_end(&self) -> u64 {
+        if self.strand == Some(GffStrand::Reverse) { self.start } else { self.end }
+    }
+
+    /// Marks the feature as incomplete, in the NCBI form.
+    pub fn mark_partial(&mut self) {
+        self.attributes.push_str(";partial=true");
+    }
+
+    /// Marks the 3' end of the feature as open (the true end lies beyond the annotated one), in the NCBI form:
+    /// `end_range=<end>,.` on the forward strand, `start_range=.,<start>` on the reverse strand.
+    pub fn mark_open_three_prime_end(&mut self) {
+        if self.strand == Some(GffStrand::Reverse) {
+            self.attributes.push_str(&format!(";start_range=.,{}", self.start));
+        } else {
+            self.attributes.push_str(&format!(";end_range={},.", self.end));
+        }
+    }
 }
 
 pub struct GffWriter<W: Write> {
