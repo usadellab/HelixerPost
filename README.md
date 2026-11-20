@@ -84,7 +84,7 @@ Common options (run `--help` for the full list):
 
 * `--rating <path>` — per-base rating file (reference vs prediction for each base and strand). Only written when given; it takes roughly 230 bytes per bp of genome (about 30 GB for 135 Mbp). The species-level precision/recall stats are always printed to stdout.
 * `-v, --verbose` — also print per-sequence and per-strand precision/recall stats, one line per sequence and per candidate window, and the decoded HMM regions (debug output, roughly 20 lines per gene). Without it, stdout holds the active config, the progress lines, the species-level stats and a total line with the gene count and run time, and warnings go to stderr. A progress line (percent of the genome in bp, sequences and genes done, elapsed time and ETA) is printed each time another 5% of the genome is processed, independent of how many sequences the assembly has.
-* `-j, --threads <N>` — HMM worker threads. Defaults to `std::thread::available_parallelism()` (all available ones).
+* `-j, --threads <N>` — HMM worker threads (default 4); `0` uses all available CPUs, as does a number larger than the available CPUs.
 * `--max-in-flight-mbp <Mbp>` — cap on the total length of the candidate windows queued or being decoded at a time (default 4). The HMM memory grows with the window length, so the cap bounds the peak memory on genomes with many long windows (e.g. human); a window longer than the cap is decoded alone. Lower it if memory is short, raise it if the threads are not kept busy. It does not change the output.
 * `-c, --config <path>` — YAML config file. CLI flags below override the file; the
   file overrides built-in defaults. See `example/default_config.yml` for the full schema.

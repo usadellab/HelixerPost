@@ -52,9 +52,9 @@ struct Cli {
     #[arg(long)]
     rating: Option<PathBuf>,
 
-    /// Worker threads for HMM evaluation (defaults to available parallelism).
-    #[arg(long, short = 'j')]
-    threads: Option<usize>,
+    /// Worker threads for HMM evaluation; 0 uses all available CPUs, as does a number larger than the available CPUs.
+    #[arg(long, short = 'j', default_value_t = 4)]
+    threads: usize,
 
     /// Cap on the total length in Mbp of the candidate windows queued or being decoded at a time. The HMM memory
     /// grows with the window length, so the cap bounds the peak memory on genomes with many long windows; a single
@@ -126,10 +126,17 @@ struct Cli {
     verbose: bool,
 }
 
-fn default_threads() -> usize {
-    std::thread::available_parallelism()
+/// Number of worker threads for `--threads requested`: all available CPUs for 0, else `requested`
+/// capped at the available CPUs.
+fn worker_threads(requested: usize) -> usize {
+    let available = std::thread::available_parallelism()
         .map(|n| n.get())
-        .unwrap_or(1)
+        .unwrap_or(1);
+    if requested == 0 {
+        available
+    } else {
+        requested.min(available)
+    }
 }
 
 fn main() -> Result<()> {
@@ -167,7 +174,7 @@ fn main() -> Result<()> {
         cli.min_intron_length,
         cli.min_intron_length_u12,
     );
-    let thread_count = cli.threads.unwrap_or_else(default_threads);
+    let thread_count = worker_threads(cli.threads);
     if cli.max_in_flight_mbp.is_nan() || cli.max_in_flight_mbp <= 0.0 {
         bail!("--max-in-flight-mbp must be positive, got {}", cli.max_in_flight_mbp);
     }

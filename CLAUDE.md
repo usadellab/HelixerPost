@@ -34,7 +34,7 @@ Key flags:
 - `-c, --config <path>` — YAML config file (full schema in `example/default_config.yml`).
 - `--print-default-config` — dump built-in defaults to stdout as YAML, then exit. Positional args are not required when this flag is present.
 - `--rating <path>` — per-base rating file, only written when given (`RatingWriter::disabled()` otherwise skips all per-base formatting); roughly 230 bytes per bp.
-- `-v, --verbose` — enables the per-sequence/per-strand rating dumps, the per-sequence and per-window progress lines and the per-region HMM traces. Without it, stdout holds the HMM/pipeline config, the progress lines, the species total rating and the `Total:` line (genes, bp, windows, run time).- `-j, --threads <N>` — defaults to `std::thread::available_parallelism()`.
+- `-v, --verbose` — enables the per-sequence/per-strand rating dumps, the per-sequence and per-window progress lines and the per-region HMM traces. Without it, stdout holds the HMM/pipeline config, the progress lines, the species total rating and the `Total:` line (genes, bp, windows, run time).- `-j, --threads <N>` — defaults to 4 (as Helixer.py passes); `0` uses all available CPUs (`std::thread::available_parallelism()`), as does a number larger than the available CPUs.
 - `--max-in-flight-mbp <Mbp>`: cap on the bp of the candidate windows queued or being decoded at a time (default 4). Resource limit only (no effect on the output), so CLI-only like `--threads` and passed to `Analyzer::new`, not part of the YAML config.
 - `--window-size`, `--edge-threshold`, `--peak-threshold`, `--min-coding-length` — pass-1/3 overrides.
 - `--hmm-prob-floor`, `--hmm-phase-retain`, `--hmm-{start,stop,donor,acceptor}-weight` — pass-2 HMM tuning overrides.
