@@ -26,6 +26,15 @@ impl Debug for Error {
     }
 }
 
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Hdf5(_, err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
 impl FromCtx<hdf5_metno::Error> for Error {
     fn from_ctx(ctx: &str, hdf5_error: hdf5_metno::Error) -> Error
     {
