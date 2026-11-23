@@ -1,3 +1,4 @@
+use crate::results::iter::BlockElement;
 use hdf5_metno::H5Type;
 use ndarray::ArrayView1;
 
@@ -5,11 +6,11 @@ pub trait ArrayConvFrom<T: Sized + H5Type> {
     fn from(array: ArrayView1<'_, T>) -> Self;
 }
 
-pub trait ArrayConvInto<T>: Sized + H5Type {
+pub trait ArrayConvInto<T>: Sized + BlockElement {
     fn into(array: ArrayView1<'_, Self>) -> T;
 }
 
-impl<T: Sized + H5Type, U> ArrayConvInto<U> for T
+impl<T: Sized + BlockElement, U> ArrayConvInto<U> for T
 where
     U: ArrayConvFrom<T>,
 {
@@ -24,6 +25,14 @@ pub struct ClassPrediction {
 }
 
 impl ClassPrediction {
+    /// Build a `ClassPrediction` directly from the four probability values
+    /// (ordering: intergenic, utr, coding, intron). Provided for tests and
+    /// any future code that needs to synthesise predictions without going
+    /// through HDF5.
+    pub fn new(values: [f32; 4]) -> Self {
+        ClassPrediction { values }
+    }
+
     pub fn get(&self) -> &[f32; 4] {
         &self.values
     }
@@ -88,6 +97,12 @@ pub struct PhasePrediction {
 }
 
 impl PhasePrediction {
+    /// Build a `PhasePrediction` directly from the four probability values
+    /// (ordering: non_coding, phase 0, phase 1, phase 2).
+    pub fn new(values: [f32; 4]) -> Self {
+        PhasePrediction { values }
+    }
+
     pub fn get(&self) -> &[f32; 4] {
         &self.values
     }
@@ -148,6 +163,12 @@ pub struct Bases {
 }
 
 impl Bases {
+    /// Build a `Bases` directly from the four one-hot / probability values
+    /// (ordering: C, A, T, G).
+    pub fn new(values: [f32; 4]) -> Self {
+        Bases { values }
+    }
+
     pub fn get(&self) -> &[f32; 4] {
         &self.values
     }
